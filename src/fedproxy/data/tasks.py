@@ -32,7 +32,10 @@ def convert_row(task: str, row: dict[str, Any], index: int, dataset=None) -> Tas
         answer = str(row["answerKey"])
         if answer not in labels:
             raise ValueError(f"Correct answer {answer!r} absent from choices")
-        return TaskExample(sample_id, task, qa_prompt(row["question"], labels, texts), answer)
+        question_field = "question_stem" if task == "obqa" else "question"
+        if question_field not in row:
+            raise ValueError(f"Missing {question_field!r} in {task} sample {sample_id}")
+        return TaskExample(sample_id, task, qa_prompt(row[question_field], labels, texts), answer)
     if dataset is None:
         raise ValueError("GLUE conversion requires the dataset feature schema")
     label = _label_name(dataset, row)
@@ -53,4 +56,3 @@ def convert_row(task: str, row: dict[str, Any], index: int, dataset=None) -> Tas
     if label not in mapping:
         raise ValueError(f"Unexpected declared label {label!r} for {task}")
     return TaskExample(sample_id, task, prompt, mapping[label])
-

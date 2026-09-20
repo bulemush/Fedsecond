@@ -1,6 +1,7 @@
 from fedproxy.data.collator import ResponseOnlyCollator
 from fedproxy.data.partition import iid_partition
 from fedproxy.data.tasks import TaskExample
+from fedproxy.data.tasks import convert_row
 
 
 class Tokenizer:
@@ -27,3 +28,14 @@ def test_response_only_mask_supervises_target_and_eos():
     assert labels[-1] == 2
     assert batch["attention_mask"].sum().item() == len(labels)
 
+
+def test_obqa_uses_question_stem_schema():
+    row = {
+        "id": "obqa-1",
+        "question_stem": "Which object conducts electricity?",
+        "choices": {"label": ["A", "B"], "text": ["copper wire", "rubber band"]},
+        "answerKey": "A",
+    }
+    example = convert_row("obqa", row, 0)
+    assert "Which object conducts electricity?" in example.prompt
+    assert example.response == "A"
