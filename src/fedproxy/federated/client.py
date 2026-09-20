@@ -39,7 +39,11 @@ def train_client(
     device = next(model.parameters()).device
     model_dtype = next(model.parameters()).dtype
     amp_enabled = device.type == "cuda" and model_dtype in {torch.float16, torch.bfloat16}
-    scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled and model_dtype == torch.float16)
+    scaler_enabled = amp_enabled and model_dtype == torch.float16
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        scaler = torch.amp.GradScaler("cuda", enabled=scaler_enabled)
+    else:  # Compatibility with older supported PyTorch releases.
+        scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     model.train()

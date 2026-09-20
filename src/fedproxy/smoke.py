@@ -45,6 +45,7 @@ def run_smoke(cfg: dict) -> dict:
         max_position_embeddings=64,
     )
     original = LlamaForCausalLM(model_config)
+    full_model_config = copy.deepcopy(original.config)
     original_reference = copy.deepcopy(original.state_dict())
     calibration = [_batch(10, model_config.vocab_size), _batch(11, model_config.vocab_size)]
     scores = score_blocks(original, calibration)
@@ -83,7 +84,9 @@ def run_smoke(cfg: dict) -> dict:
     tuned_proxy = make_model()
     load_adapter(tuned_proxy, final_adapter)
     merged_proxy = merge_lora_into_proxy(tuned_proxy)
-    fresh_original = LlamaForCausalLM(model_config)
+    # build_proxy mutates the proxy model's config.num_hidden_layers. Rebuild the
+    # full model from the independent pre-pruning config, not the proxy config.
+    fresh_original = LlamaForCausalLM(full_model_config)
     fresh_original.load_state_dict(original_reference, strict=True)
     fused = replace_mapped_layers(fresh_original, merged_proxy, layer_map)
     fused.eval()
@@ -109,4 +112,3 @@ def run_smoke(cfg: dict) -> dict:
     }
     (run_dir / "smoke_result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
-
