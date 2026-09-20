@@ -1,0 +1,94 @@
+run:
+  name: base
+  seed: 42
+  output_dir: runs/base
+  synthetic: false
+model:
+  family: llama
+  name_or_path: meta-llama/Llama-2-7b-hf
+  revision: null
+  tokenizer_name_or_path: null
+  dtype: auto
+  trust_remote_code: false
+  local_files_only: false
+compression:
+  method: block_influence
+  remove_ratio: 0.5
+  keep_count_rule: floor_removed
+  calibration_dataset: alpaca
+  calibration_samples: 512
+  calibration_max_length: 512
+  calibration_batch_size: 1
+  calibration_seed: 42
+  calibration_revision: null
+  force_keep_first: false
+  force_keep_last: false
+data:
+  scenario: heterogeneous
+  tasks: [obqa, arc_easy, arc_challenge, commonsense_qa, sst2, mrpc, rte, mnli]
+  num_clients: 8
+  max_train_samples_per_task: 5000
+  partition_seed: 42
+  revisions: {}
+  prompt_version: unified_v1
+  use_chat_template: false
+  max_input_length: 64
+  max_target_length: 128
+  input_truncation_side: right
+  response_only_loss: true
+lora:
+  r: 32
+  alpha: 64
+  dropout: 0.1
+  bias: none
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+training:
+  optimizer: adamw
+  learning_rate: 5.0e-5
+  local_epochs: 10
+  effective_batch_size: 16
+  micro_batch_size: 2
+  gradient_accumulation_steps: 8
+  weight_decay: 0.0
+  scheduler: constant
+  warmup_steps: 0
+  max_grad_norm: null
+  gradient_checkpointing: true
+  reset_optimizer_each_round: true
+federated:
+  rounds: null
+  participation: full
+  client_execution: sequential
+  parameter_space: lora_ab
+  aggregation: h_ties
+  analysis_dtype: float32
+  state_device: cpu
+  chunk_size: 1048576
+  fedavg_weighting: num_examples
+pcr:
+  enabled: true
+  lambda_reg: 1.0e-5
+  reduction: sum
+  conflict_rule: paper_sign_abs
+h_ties:
+  r0: 1.0
+  delta: 0.2
+  rho: 1.1
+  epsilon: 1.0e-12
+  sparsify_scope: global_adapter
+  sparsify_rule: magnitude_topk
+  topk_rounding: floor
+  tie_break: canonical_index
+  similarity_weight: absolute_cosine
+evaluation:
+  backend: lm_eval
+  num_fewshot: 0
+  batch_size: 1
+  evaluate_proxy: true
+  evaluate_fused: true
+  harness_tasks: [openbookqa, arc_easy, arc_challenge, commonsense_qa, sst2, mrpc, rte, mnli]
+  primary_metric: acc
+checkpoint:
+  every_round: 1
+  save_conflict: true
+  atomic: true

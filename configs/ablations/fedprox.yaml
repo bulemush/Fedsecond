@@ -1,0 +1,6 @@
+extends: ../base.yaml
+run: {name: fedprox, output_dir: runs/fedprox}
+pcr: {enabled: false, lambda_reg: 1.0e-5, reduction: sum, conflict_rule: paper_sign_abs}
+federated: {aggregation: fedavg}
+fedprox: {enabled: true, mu: 2.0e-5}
+

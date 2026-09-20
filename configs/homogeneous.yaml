@@ -1,0 +1,9 @@
+extends: base.yaml
+run:
+  name: llama2_homogeneous_obqa_50
+  output_dir: runs/llama2_homogeneous_obqa_50
+data:
+  scenario: homogeneous
+  tasks: [obqa]
+  num_clients: 4
+

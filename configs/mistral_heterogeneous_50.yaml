@@ -1,0 +1,8 @@
+extends: base.yaml
+run:
+  name: mistral_heterogeneous_50
+  output_dir: runs/mistral_heterogeneous_50
+model:
+  family: mistral
+  name_or_path: mistralai/Mistral-7B-Instruct-v0.2
+

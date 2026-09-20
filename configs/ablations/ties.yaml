@@ -1,0 +1,6 @@
+extends: ../base.yaml
+run: {name: ties, output_dir: runs/ties}
+pcr: {enabled: false, lambda_reg: 1.0e-5, reduction: sum, conflict_rule: paper_sign_abs}
+federated: {aggregation: ties}
+ties: {retention: 1.0}
+

@@ -1,0 +1,10 @@
+extends: base.yaml
+run:
+  name: llama2_heterogeneous_50
+  output_dir: runs/llama2_heterogeneous_50
+model:
+  family: llama
+  name_or_path: /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf@huggingface_llm
+  tokenizer_name_or_path: /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf@huggingface_llm
+  revision: null
+  local_files_only: true

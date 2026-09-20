@@ -1,0 +1,4 @@
+extends: ../base.yaml
+run: {name: without_pcr, output_dir: runs/without_pcr}
+pcr: {enabled: false, lambda_reg: 1.0e-5, reduction: sum, conflict_rule: paper_sign_abs}
+

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fedproxy-repro"
+version = "0.1.0"
+description = "Method-level reproduction of FedProxy"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pyyaml>=6.0",
+  "torch>=2.1",
+  "transformers>=4.40",
+  "peft>=0.11",
+  "datasets>=2.18",
+  "safetensors>=0.4",
+  "accelerate>=0.28",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+eval = ["lm-eval>=0.4.4"]
+
+[project.scripts]
+fedproxy = "fedproxy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+

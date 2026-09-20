@@ -1,0 +1,4 @@
+extends: ../base.yaml
+run: {name: pcr_only, output_dir: runs/pcr_only}
+federated: {aggregation: fedavg}
+
