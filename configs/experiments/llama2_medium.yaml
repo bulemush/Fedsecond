@@ -1,0 +1,18 @@
+extends: ../llama2_heterogeneous_50.yaml
+run:
+  name: llama2_pilot_512
+  output_dir: runs/llama2_pilot_512
+  diagnostic: true
+compression:
+  calibration_samples: 128
+data:
+  max_train_samples_per_task: 512
+training:
+  local_epochs: 2
+  effective_batch_size: 16
+  micro_batch_size: 1
+  gradient_accumulation_steps: 16
+federated:
+  rounds: 3
+  client_execution: sequential
+  max_parallel_clients: 1

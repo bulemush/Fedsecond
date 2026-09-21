@@ -1,0 +1,19 @@
+extends: ../llama2_heterogeneous_50.yaml
+run:
+  name: llama2_large_multigpu
+  output_dir: runs/llama2_large_multigpu
+  diagnostic: true
+compression:
+  calibration_samples: 512
+  device_map: balanced
+data:
+  max_train_samples_per_task: 2000
+training:
+  local_epochs: 5
+  effective_batch_size: 16
+  micro_batch_size: 1
+  gradient_accumulation_steps: 16
+federated:
+  rounds: 5
+  client_execution: parallel
+  max_parallel_clients: 0

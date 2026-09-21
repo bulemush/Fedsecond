@@ -13,13 +13,16 @@ from .state import TensorState, add_states, canonical_state, subtract_states, ze
 def run_federated(
     initial_adapter: TensorState,
     client_ids: list[str],
-    train_one: Callable[[str, TensorState, TensorState, int], object],
+    train_one: Callable[[str, TensorState, TensorState, int], object] | None,
     cfg: dict,
     *,
     checkpoint_root: str | Path,
     resume: str | Path | None = None,
     invariants: dict | None = None,
+    train_many: Callable[[list[str], TensorState, TensorState, int], list[object]] | None = None,
 ):
+    if (train_one is None) == (train_many is None):
+        raise ValueError("Provide exactly one of train_one or train_many")
     global_adapter = canonical_state(initial_adapter)
     conflict = zeros_like_state(global_adapter)
     start_round = 0
@@ -31,10 +34,16 @@ def run_federated(
     history = []
     for round_id in range(start_round, rounds):
         round_base = canonical_state(global_adapter)
-        results = [
-            train_one(client_id, canonical_state(round_base), canonical_state(conflict), round_id)
-            for client_id in client_ids
-        ]
+        if train_many is not None:
+            results = train_many(client_ids, canonical_state(round_base), canonical_state(conflict), round_id)
+        else:
+            assert train_one is not None
+            results = [
+                train_one(client_id, canonical_state(round_base), canonical_state(conflict), round_id)
+                for client_id in client_ids
+            ]
+        if [result.client_id for result in results] != client_ids:
+            raise ValueError("Client results must preserve the scheduled client order")
         deltas = [subtract_states(result.adapter_state, round_base) for result in results]
         analysis = analyze_updates_chunked(
             deltas,

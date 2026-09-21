@@ -92,6 +92,8 @@ def validate_config(cfg: dict[str, Any], command: str | None = None) -> None:
         raise ConfigError("compression.remove_ratio must be in [0, 1)")
     if int(cfg["data"]["num_clients"]) < 1:
         raise ConfigError("data.num_clients must be positive")
+    if not str(cfg["data"].get("local_dir", "")).strip():
+        raise ConfigError("data.local_dir must be a non-empty path")
     if cfg["data"].get("scenario") not in {"homogeneous", "heterogeneous"}:
         raise ConfigError("data.scenario must be homogeneous or heterogeneous")
     if int(cfg["lora"]["r"]) < 1 or int(cfg["lora"]["alpha"]) < 1:
@@ -106,6 +108,16 @@ def validate_config(cfg: dict[str, Any], command: str | None = None) -> None:
         raise ConfigError("federated.rounds must be positive")
     if cfg["federated"].get("participation") != "full":
         raise ConfigError("v1 implements full participation only")
+    execution = cfg["federated"].get("client_execution")
+    if execution not in {"sequential", "parallel"}:
+        raise ConfigError("federated.client_execution must be sequential or parallel")
+    parallel_clients = int(cfg["federated"].get("max_parallel_clients", 1))
+    if execution == "sequential" and parallel_clients != 1:
+        raise ConfigError("Sequential execution requires max_parallel_clients=1")
+    if execution == "parallel" and parallel_clients < 0:
+        raise ConfigError("Parallel max_parallel_clients must be zero (auto) or positive")
+    if cfg["compression"].get("device_map") not in {None, "auto", "balanced"}:
+        raise ConfigError("compression.device_map must be null, auto, or balanced")
     if cfg["federated"].get("parameter_space") != "lora_ab":
         raise ConfigError("v1 implements LoRA A/B parameter space only")
     if cfg["pcr"].get("reduction") != "sum":

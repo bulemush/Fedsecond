@@ -60,3 +60,25 @@ def test_resume_matches_continuous_round_boundaries(tmp_path):
     torch.testing.assert_close(resumed["x"], continuous["x"])
     torch.testing.assert_close(conflict_b["x"], conflict_a["x"])
 
+
+def test_batch_client_callback_preserves_federated_semantics(tmp_path):
+    initial = {"x": torch.zeros(2)}
+    calls = []
+
+    def train_many(client_ids, base, conflict, round_id):
+        calls.append((list(client_ids), base["x"].clone(), conflict["x"].clone(), round_id))
+        worker = deterministic_client()
+        return [worker(client_id, base, conflict, round_id) for client_id in client_ids]
+
+    result, _, _ = run_federated(
+        initial,
+        ["a", "b"],
+        None,
+        config(1),
+        checkpoint_root=tmp_path / "parallel",
+        train_many=train_many,
+    )
+    assert len(calls) == 1
+    assert calls[0][0] == ["a", "b"]
+    torch.testing.assert_close(calls[0][1], initial["x"])
+    torch.testing.assert_close(result["x"], torch.zeros(2))
