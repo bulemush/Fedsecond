@@ -16,7 +16,12 @@ def _config(args, command):
         cfg["federated"]["rounds"] = args.rounds
     validate_config(cfg, command)
     run_dir = Path(cfg["run"]["output_dir"])
-    save_resolved_config(cfg, run_dir / "resolved_config.yaml")
+    # Keep an immutable command-level snapshot. Later fuse/evaluate commands
+    # must not erase the training snapshot that contains the explicit rounds.
+    save_resolved_config(cfg, run_dir / f"resolved_config.{command}.yaml")
+    primary = run_dir / "resolved_config.yaml"
+    if command == "train" or not primary.exists():
+        save_resolved_config(cfg, primary)
     write_environment(run_dir / "environment.json")
     (run_dir / "reproduction_decisions.json").write_text(
         json.dumps(REPRODUCTION_DECISIONS, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -35,6 +40,7 @@ def build_parser():
     train.add_argument("--config", required=True)
     train.add_argument("--rounds", type=int)
     train.add_argument("--resume")
+    train.add_argument("--dry-run", action="store_true")
     train.add_argument("--set", action="append", default=[])
     fuse = sub.add_parser("fuse")
     fuse.add_argument("--config", required=True)
@@ -64,7 +70,7 @@ def main(argv=None):
     elif args.command == "smoke":
         result = run_smoke(cfg)
     elif args.command == "train":
-        result = train(cfg, resume=args.resume)
+        result = train(cfg, resume=args.resume, dry_run=args.dry_run)
     elif args.command == "fuse":
         result = fuse(cfg, args.checkpoint, overwrite=args.overwrite)
     elif args.command == "evaluate":

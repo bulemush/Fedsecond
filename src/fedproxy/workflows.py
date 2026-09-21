@@ -155,7 +155,7 @@ def _build_client_loaders(cfg: dict, manifest: dict, tokenizer):
     return loaders
 
 
-def train(cfg: dict, resume: str | None = None) -> dict:
+def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
     from torch.utils.data import DataLoader
     from transformers import AutoModelForCausalLM
 
@@ -211,6 +211,8 @@ def train(cfg: dict, resume: str | None = None) -> dict:
     }
     _write_json(run_dir / "training_budget.json", training_budget)
     print(json.dumps({"training_budget": training_budget}, indent=2))
+    if dry_run:
+        return {"dry_run": True, "training_budget": training_budget}
 
     def train_one(client_id, base, conflict, round_id):
         local_seed = derived_seed(int(cfg["run"]["seed"]), round_id, client_id)
