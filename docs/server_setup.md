@@ -54,6 +54,8 @@ Xshell 断开后仍需继续运行时，改用后台入口：
 
 `CUDA_VISIBLE_DEVICES=2,3` 后，工作进程内部看到的设备编号会重新映射为 `cuda:0` 和 `cuda:1`，日志中的 `visible_device_index` 指的是这个可见编号。多卡实现并行训练不同客户端，而不是让不同客户端串行共享一个 DDP 模型；这保留了客户端模型、优化器和数据的隔离。
 
+多进程边界上的 LoRA adapter、round base 和 conflict state 都会先打包为单个连续张量，再通过共享内存传输；不会为数百个 LoRA 参数分别打开文件描述符，因此无需依赖提高 `ulimit -n`。
+
 `dry-run` 只解析数据和预算，不装载训练模型。默认 `evaluate` 阶段依次生成 original、proxy、fused 三套结果；若只想补跑一种模型，可使用 `evaluate-original`、`evaluate-proxy` 或 `evaluate-fused`。
 
 ## 首次验证顺序

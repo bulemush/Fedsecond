@@ -20,6 +20,12 @@ from fedproxy.evaluation.harness import evaluate_with_lm_eval
 from fedproxy.evaluation.report import compare_runs, summarize
 from fedproxy.federated.client import estimate_optimizer_steps, train_client
 from fedproxy.federated.server import run_federated
+from fedproxy.federated.state import (
+    ClientResult,
+    ParameterSpec,
+    flatten_state,
+    unflatten_state,
+)
 from fedproxy.fusion.plug_in import fuse_and_save
 from fedproxy.models.backbone import load_causal_lm, load_tokenizer, resolve_dtype
 from fedproxy.models.lora import export_adapter, inject_lora, load_adapter, merge_lora_into_proxy
@@ -210,6 +216,28 @@ def _load_train_model(proxy_path: str | Path, cfg: dict, device: torch.device):
     return model.to(device)
 
 
+def _pack_client_result(result: ClientResult, spec: ParameterSpec) -> dict:
+    """Collapse a client adapter to one tensor for multiprocessing transport."""
+    return {
+        "client_id": result.client_id,
+        "adapter_vector": flatten_state(result.adapter_state, spec).contiguous(),
+        "num_examples": result.num_examples,
+        "metrics": result.metrics,
+        "schema_hash": spec.schema_hash,
+    }
+
+
+def _unpack_client_result(payload: dict, spec: ParameterSpec) -> ClientResult:
+    if payload["schema_hash"] != spec.schema_hash:
+        raise ValueError("Parallel client result uses an incompatible adapter schema")
+    return ClientResult(
+        client_id=payload["client_id"],
+        adapter_state=unflatten_state(payload["adapter_vector"], spec),
+        num_examples=int(payload["num_examples"]),
+        metrics=payload["metrics"],
+    )
+
+
 def _parallel_client_worker(payload: dict):
     cfg = payload["cfg"]
     client_id = payload["client_id"]
@@ -229,17 +257,20 @@ def _parallel_client_worker(payload: dict):
     def model_factory():
         return _load_train_model(payload["proxy_path"], cfg, device)
 
+    spec = payload["state_spec"]
+    round_base = unflatten_state(payload["round_base_vector"], spec)
+    conflict = unflatten_state(payload["conflict_vector"], spec)
     result = train_client(
         client_id,
         model_factory,
-        payload["round_base"],
-        payload["conflict"],
+        round_base,
+        conflict,
         loader,
         cfg,
     )
     result.metrics["visible_device_index"] = float(device_index)
     torch.cuda.empty_cache()
-    return result
+    return _pack_client_result(result, spec)
 
 
 def _build_client_loaders(cfg: dict, manifest: dict, tokenizer):
@@ -311,6 +342,9 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
         "resolved_dtype": str(resolve_dtype(cfg["model"].get("dtype", "auto"))),
         "client_execution": execution,
         "parallel_clients": parallelism,
+        "parallel_state_transport": (
+            "packed_tensor_v1" if execution == "parallel" else None
+        ),
         "visible_cuda_devices": [
             torch.cuda.get_device_name(index) for index in range(visible_gpus)
         ],
@@ -353,8 +387,13 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
         context = multiprocessing.get_context("spawn")
 
         def train_many(scheduled, base, conflict, round_id):
-            shared_base = {name: tensor.share_memory_() for name, tensor in base.items()}
-            shared_conflict = {name: tensor.share_memory_() for name, tensor in conflict.items()}
+            state_spec = ParameterSpec.from_state(base)
+            # A LLaMA LoRA adapter contains hundreds of tensors. Passing the
+            # dictionaries through a multiprocessing queue consumes one file
+            # descriptor per tensor and can exceed Linux's open-file limit.
+            # Pack each state into one shared storage instead.
+            shared_base = flatten_state(base, state_spec).contiguous().share_memory_()
+            shared_conflict = flatten_state(conflict, state_spec).contiguous().share_memory_()
             results = []
             for start in range(0, len(scheduled), parallelism):
                 wave = scheduled[start : start + parallelism]
@@ -366,15 +405,21 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
                         "round_id": round_id,
                         "proxy_path": str(proxy_path),
                         "manifest": data_manifest,
-                        "round_base": shared_base,
-                        "conflict": shared_conflict,
+                        "state_spec": state_spec,
+                        "round_base_vector": shared_base,
+                        "conflict_vector": shared_conflict,
                     }
                     for offset, client_id in enumerate(wave)
                 ]
                 with ProcessPoolExecutor(
                     max_workers=len(wave), mp_context=context
                 ) as executor:
-                    results.extend(executor.map(_parallel_client_worker, payloads))
+                    for packed in executor.map(_parallel_client_worker, payloads):
+                        results.append(_unpack_client_result(packed, state_spec))
+                    # Drop the last queue-backed result tensor before the
+                    # worker processes and their resource sharers exit.
+                    if wave:
+                        del packed
             return results
 
     adapter, conflict, history = run_federated(

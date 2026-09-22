@@ -5,7 +5,7 @@ run:
   diagnostic: true
 compression:
   calibration_samples: 512
-  device_map: balanced
+  device_map: null
 data:
   max_train_samples_per_task: 2000
 training:
