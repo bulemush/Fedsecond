@@ -63,6 +63,8 @@ chmod +x scripts/launch_experiment.sh
 ./scripts/launch_experiment.sh configs/experiments/llama2_large_multigpu.yaml 2,3 train
 ```
 
+后台入口会立即跟随日志并显示每轮、每批客户端、GPU、epoch、优化步、完成百分比、loss、耗时和预计剩余时间。默认约每 30 秒更新一次；按 `Ctrl+C` 只退出日志查看，已通过 `nohup`/`setsid` 启动的训练仍会继续。
+
 第三个参数可以只运行一个阶段：`prepare`、`compress`、`dry-run`、`train`、`resume`、`fuse`、`evaluate`。其中 `evaluate` 会依次评测 original、proxy 和 fused；也可用 `evaluate-original`、`evaluate-proxy` 或 `evaluate-fused` 单独评测。例如：
 
 ```bash
@@ -73,6 +75,23 @@ chmod +x scripts/launch_experiment.sh
 多卡训练采用客户端并行：每张可见 GPU 同时训练一个独立客户端，每个客户端仍从同一个 `round_base` 开始；一批客户端结束后由 CPU 服务端统一分析和聚合。`max_parallel_clients: 0` 表示自动使用全部可见 GPU。多卡配置在压缩阶段使用 `device_map: balanced`，将完整基础模型均衡分片到可见 GPU。
 
 GPU 编号不写入 YAML：`CUDA_VISIBLE_DEVICES` 必须在 Python 导入 PyTorch 前设置，所以由启动脚本的第二个参数注入。除这个编号外，实验超参数全部保存在 YAML 中；脚本同时把物理编号记录进 `training_budget.json`。
+
+## 截断诊断：按顺序运行
+
+保留原 `llama2_large_multigpu` 实验不变。两个消融配置沿用原实验的压缩代理与数据划分，分别写入独立目录；`reuse-all` 会检查并链接这两份产物，先审计，再训练、融合和评测。务必在服务器项目根目录运行，且先确认 `runs/llama2_large_multigpu/compression/proxy`、`compression_manifest.json` 与 `data_manifest.json` 都存在。
+
+```bash
+# 1. 先只审计 320-token 对照；确认各任务 truncation_rate 近似为 0
+./scripts/run_experiment.sh configs/experiments/llama2_large_len320.yaml 2,3 reuse-audit
+# 2. 审计通过后运行 320-token 对照
+./scripts/run_experiment.sh configs/experiments/llama2_large_len320.yaml 2,3 reuse-all
+# 3. 上一步完成后，先审计 64-token 结构化版本
+./scripts/run_experiment.sh configs/experiments/llama2_large_structured64.yaml 2,3 reuse-audit
+# 4. 审计通过后运行 64-token 消融
+./scripts/run_experiment.sh configs/experiments/llama2_large_structured64.yaml 2,3 reuse-all
+```
+
+长时间任务可将上面两条命令中的 `run_experiment.sh` 改为 `launch_experiment.sh`（后台 `nohup`，可断开 Xshell）；仍应等第一项完成、检查结果后再启动第二项。审计写入 `runs/<实验名>/metrics/truncation_audit.json`，评测写入 `runs/<实验名>/evaluation/fused_summary.json`。64-token 结构化审计如发现答案提示、NLI 假设或选项标签丢失，会在训练前报错；不要绕过该检查。320-token 是诊断消融，不是论文 Appendix B 的 64-token 设定。比较原实验和两个新实验的各任务准确率时，还需注意评测采用 lm-eval 的独立提示模板，训练提示的截断率不能直接解释全部评测差距。
 
 ## 主要实现边界
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ $# -lt 2 || $# -gt 3 ]]; then
   echo "Usage: $0 CONFIG GPU_IDS [STAGE]" >&2
-  echo "  STAGE: all|prepare|compress|dry-run|train|resume|fuse|evaluate|evaluate-original|evaluate-proxy|evaluate-fused (default: all)" >&2
+  echo "  STAGE: all|reuse-audit|reuse-all|audit|prepare|compress|dry-run|train|resume|fuse|evaluate|evaluate-original|evaluate-proxy|evaluate-fused (default: all)" >&2
   exit 2
 fi
 
@@ -42,6 +42,51 @@ fi
 
 prepare() {
   python -m fedproxy.cli prepare-data --config "$CONFIG"
+}
+
+audit() {
+  python -m fedproxy.cli audit-truncation --config "$CONFIG"
+}
+
+reuse_inputs() {
+  local source_dir source_abs name destination expected actual
+  source_dir=$(python - "$CONFIG" <<'PY'
+import sys
+from fedproxy.config import load_config
+
+print(load_config(sys.argv[1])["run"].get("reuse_artifacts_from", ""))
+PY
+)
+  if [[ -z "$source_dir" ]]; then
+    echo "run.reuse_artifacts_from is required for reuse-all" >&2
+    exit 2
+  fi
+  if [[ ! -f "$source_dir/compression/compression_manifest.json" || ! -d "$source_dir/compression/proxy" || ! -f "$source_dir/data_manifest.json" ]]; then
+    echo "Source run lacks compression or data manifest: $source_dir" >&2
+    exit 2
+  fi
+  source_abs=$(realpath -- "$source_dir")
+  mkdir -p "$RUN_DIR"
+  if [[ "$(realpath -- "$RUN_DIR")" == "$source_abs" ]]; then
+    echo "Refusing to reuse a run as its own output" >&2
+    exit 2
+  fi
+  for name in compression data_manifest.json; do
+    destination="$RUN_DIR/$name"
+    expected="$source_abs/$name"
+    if [[ -L "$destination" ]]; then
+      actual=$(realpath -- "$destination")
+      if [[ "$actual" != "$expected" ]]; then
+        echo "Existing link points elsewhere: $destination" >&2
+        exit 2
+      fi
+    elif [[ -e "$destination" ]]; then
+      echo "Refusing to replace existing artifact: $destination" >&2
+      exit 2
+    else
+      ln -s -- "$expected" "$destination"
+    fi
+  done
 }
 
 compress() {
@@ -97,12 +142,26 @@ evaluate_fused() {
 case "$STAGE" in
   all)
     prepare
+    audit
     compress
     dry_run
     train
     fuse
     evaluate
     ;;
+  reuse-audit)
+    reuse_inputs
+    audit
+    ;;
+  reuse-all)
+    reuse_inputs
+    audit
+    dry_run
+    train
+    fuse
+    evaluate_fused
+    ;;
+  audit) audit ;;
   prepare) prepare ;;
   compress) compress ;;
   dry-run) dry_run ;;

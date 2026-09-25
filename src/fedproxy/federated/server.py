@@ -33,6 +33,11 @@ def run_federated(
     rounds = int(cfg["federated"]["rounds"])
     history = []
     for round_id in range(start_round, rounds):
+        print(
+            f"[federated] round={round_id + 1}/{rounds} status=started "
+            f"clients={len(client_ids)}",
+            flush=True,
+        )
         round_base = canonical_state(global_adapter)
         if train_many is not None:
             results = train_many(client_ids, canonical_state(round_base), canonical_state(conflict), round_id)
@@ -44,6 +49,10 @@ def run_federated(
             ]
         if [result.client_id for result in results] != client_ids:
             raise ValueError("Client results must preserve the scheduled client order")
+        print(
+            f"[federated] round={round_id + 1}/{rounds} status=aggregating",
+            flush=True,
+        )
         deltas = [subtract_states(result.adapter_state, round_base) for result in results]
         analysis = analyze_updates_chunked(
             deltas,
@@ -93,6 +102,12 @@ def run_federated(
             },
             **(invariants or {}),
         }
-        save_checkpoint(Path(checkpoint_root) / f"round_{round_id + 1:04d}", global_adapter, conflict, metadata)
+        checkpoint_path = Path(checkpoint_root) / f"round_{round_id + 1:04d}"
+        save_checkpoint(checkpoint_path, global_adapter, conflict, metadata)
+        print(
+            f"[federated] round={round_id + 1}/{rounds} status=completed "
+            f"checkpoint={checkpoint_path}",
+            flush=True,
+        )
         history.append(metadata)
     return global_adapter, conflict, history

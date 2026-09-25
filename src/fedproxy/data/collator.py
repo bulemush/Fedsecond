@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
 from .tasks import TaskExample
+from .truncation import PromptEncoding, encode_prompt
 
 
 @dataclass
@@ -12,9 +13,26 @@ class ResponseOnlyCollator:
     tokenizer: object
     max_input_length: int = 64
     max_target_length: int = 128
+    prompt_truncation_strategy: str = "prefix"
+    input_truncation_side: str = "right"
+    _prompt_cache: dict[tuple[str, str], PromptEncoding] = field(default_factory=dict, init=False, repr=False)
+
+    def prepare_prompt(self, example: TaskExample) -> PromptEncoding:
+        key = (example.task_name, example.prompt)
+        prepared = self._prompt_cache.get(key)
+        if prepared is None:
+            prepared = encode_prompt(
+                example,
+                self.tokenizer,
+                self.max_input_length,
+                strategy=self.prompt_truncation_strategy,
+                truncation_side=self.input_truncation_side,
+            )
+            self._prompt_cache[key] = prepared
+        return prepared
 
     def _encode(self, example: TaskExample):
-        prompt = self.tokenizer.encode(example.prompt, add_special_tokens=True)[: self.max_input_length]
+        prompt = self.prepare_prompt(example).input_ids
         target = self.tokenizer.encode(example.response, add_special_tokens=False)
         eos = self.tokenizer.eos_token_id
         target = target[: max(0, self.max_target_length - 1)] + [eos]
@@ -39,4 +57,3 @@ class ResponseOnlyCollator:
             "labels": torch.tensor(labels, dtype=torch.long),
             "attention_mask": torch.tensor(attention, dtype=torch.long),
         }
-

@@ -30,7 +30,7 @@ STAMP=$(date '+%Y%m%d_%H%M%S')
 LOG_PATH="$RUN_DIR/logs/${STAGE}_${STAMP}.log"
 PID_PATH="$RUN_DIR/logs/${STAGE}.pid"
 
-nohup bash "$SCRIPT_DIR/run_experiment.sh" "$CONFIG" "$GPU_IDS" "$STAGE" \
+nohup setsid bash "$SCRIPT_DIR/run_experiment.sh" "$CONFIG" "$GPU_IDS" "$STAGE" \
   >"$LOG_PATH" 2>&1 < /dev/null &
 PID=$!
 printf '%s\n' "$PID" > "$PID_PATH"
@@ -38,3 +38,7 @@ printf '%s\n' "$PID" > "$PID_PATH"
 echo "Started PID $PID"
 echo "Log: $LOG_PATH"
 echo "Follow: tail -f $LOG_PATH"
+echo "Showing live progress now. Press Ctrl+C to stop viewing; the nohup job will continue."
+
+tail -n +1 --pid="$PID" -f "$LOG_PATH"
+wait "$PID"

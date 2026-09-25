@@ -5,5 +5,5 @@ __pycache__/
 .venv/
 runs/
 reports/
-data/
+/data/
 *.egg-info/

@@ -38,6 +38,8 @@ data:
   max_input_length: 64
   max_target_length: 128
   input_truncation_side: right
+  prompt_truncation_strategy: prefix
+  truncation_audit: true
   response_only_loss: true
 lora:
   r: 32

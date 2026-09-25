@@ -13,6 +13,8 @@ class Tokenizer:
         return prefix + [3 + (ord(char) % 10) for char in text]
 
 
+
+
 def test_iid_partition_is_disjoint_and_complete():
     partition = iid_partition(list(range(20)), 4, 42)
     flat = [item for values in partition.values() for item in values]
@@ -39,3 +41,4 @@ def test_obqa_uses_question_stem_schema():
     example = convert_row("obqa", row, 0)
     assert "Which object conducts electricity?" in example.prompt
     assert example.response == "A"
+

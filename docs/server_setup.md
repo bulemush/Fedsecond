@@ -52,6 +52,8 @@ Xshell 断开后仍需继续运行时，改用后台入口：
 
 它会把输出保存到 `runs/<实验名>/logs/`，并打印可直接执行的 `tail -f` 命令；PID 同时写入同目录的 `<stage>.pid`。
 
+启动后终端会自动跟随该日志。训练进度默认约每 30 秒输出一次，包含 round、wave、client、GPU、epoch、optimizer step、百分比、loss、elapsed 和 ETA。按 `Ctrl+C` 只停止查看日志，不会停止已经脱离 SSH 会话的后台训练；之后仍可使用启动时打印的 `tail -f` 命令继续查看。
+
 `CUDA_VISIBLE_DEVICES=2,3` 后，工作进程内部看到的设备编号会重新映射为 `cuda:0` 和 `cuda:1`，日志中的 `visible_device_index` 指的是这个可见编号。多卡实现并行训练不同客户端，而不是让不同客户端串行共享一个 DDP 模型；这保留了客户端模型、优化器和数据的隔离。
 
 多进程边界上的 LoRA adapter、round base 和 conflict state 都会先打包为单个连续张量，再通过共享内存传输；不会为数百个 LoRA 参数分别打开文件描述符，因此无需依赖提高 `ulimit -n`。

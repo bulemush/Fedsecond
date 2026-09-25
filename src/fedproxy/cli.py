@@ -7,7 +7,7 @@ from pathlib import Path
 from fedproxy.config import REPRODUCTION_DECISIONS, apply_overrides, load_config, save_resolved_config, validate_config
 from fedproxy.smoke import run_smoke
 from fedproxy.utils.reproducibility import write_environment
-from fedproxy.workflows import compare, compress, evaluate, fuse, prepare_data, train
+from fedproxy.workflows import audit_training_prompts, compare, compress, evaluate, fuse, prepare_data, train
 
 
 def _config(args, command):
@@ -42,6 +42,9 @@ def build_parser():
     train.add_argument("--resume")
     train.add_argument("--dry-run", action="store_true")
     train.add_argument("--set", action="append", default=[])
+    audit = sub.add_parser("audit-truncation")
+    audit.add_argument("--config", required=True)
+    audit.add_argument("--set", action="append", default=[])
     fuse = sub.add_parser("fuse")
     fuse.add_argument("--config", required=True)
     fuse.add_argument("--checkpoint", required=True)
@@ -69,6 +72,8 @@ def main(argv=None):
         result = compress(cfg)
     elif args.command == "smoke":
         result = run_smoke(cfg)
+    elif args.command == "audit-truncation":
+        result = audit_training_prompts(cfg)
     elif args.command == "train":
         result = train(cfg, resume=args.resume, dry_run=args.dry_run)
     elif args.command == "fuse":

@@ -1,0 +1,10 @@
+# Diagnostic ablation: same large-run budget, but retain every selected prompt
+# observed in the 2000-sample audit (maximum observed length: 313 tokens).
+extends: llama2_large_multigpu.yaml
+run:
+  name: llama2_large_len320
+  output_dir: runs/llama2_large_len320
+  reuse_artifacts_from: runs/llama2_large_multigpu
+data:
+  max_input_length: 320
+  prompt_truncation_strategy: prefix

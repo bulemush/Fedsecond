@@ -94,6 +94,12 @@ def validate_config(cfg: dict[str, Any], command: str | None = None) -> None:
         raise ConfigError("data.num_clients must be positive")
     if not str(cfg["data"].get("local_dir", "")).strip():
         raise ConfigError("data.local_dir must be a non-empty path")
+    if int(cfg["data"].get("max_input_length", 0)) < 1:
+        raise ConfigError("data.max_input_length must be positive")
+    if cfg["data"].get("prompt_truncation_strategy", "prefix") not in {"prefix", "structured"}:
+        raise ConfigError("data.prompt_truncation_strategy must be prefix or structured")
+    if cfg["data"].get("input_truncation_side", "right") not in {"right", "left"}:
+        raise ConfigError("data.input_truncation_side must be right or left")
     if cfg["data"].get("scenario") not in {"homogeneous", "heterogeneous"}:
         raise ConfigError("data.scenario must be homogeneous or heterogeneous")
     if int(cfg["lora"]["r"]) < 1 or int(cfg["lora"]["alpha"]) < 1:

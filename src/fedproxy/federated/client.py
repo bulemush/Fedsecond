@@ -20,15 +20,28 @@ def train_client(
     conflict_scores: TensorState,
     train_loader,
     config: dict,
+    *,
+    round_id: int | None = None,
+    device_label: str | None = None,
 ) -> ClientResult:
     started = time.perf_counter()
+    training = config["training"]
+    progress_enabled = bool(training.get("progress", True))
+    total_rounds = int(config["federated"]["rounds"])
+    round_number = 1 if round_id is None else round_id + 1
+    device_label = device_label or "auto"
+    prefix = (
+        f"[train] round={round_number}/{total_rounds} "
+        f"client={client_id} device={device_label}"
+    )
+    if progress_enabled:
+        print(f"{prefix} status=loading_model", flush=True)
     model = model_factory()
     load_adapter(model, global_adapter)
     anchor = {name: value.detach().cpu().float().clone() for name, value in global_adapter.items()}
     parameters = trainable_adapter_parameters(model)
     if set(parameters) != set(anchor):
         raise ValueError("Trainable LoRA parameters do not match the global adapter schema")
-    training = config["training"]
     optimizer = torch.optim.AdamW(
         parameters.values(),
         lr=float(training["learning_rate"]),
@@ -50,6 +63,17 @@ def train_client(
     if hasattr(model.config, "use_cache"):
         model.config.use_cache = False
     optimizer_steps = 0
+    num_examples = len(train_loader.dataset) if hasattr(train_loader, "dataset") else 0
+    total_optimizer_steps = estimate_optimizer_steps(num_examples, training)
+    progress_interval = float(training.get("progress_log_interval_seconds", 30))
+    training_started = time.perf_counter()
+    last_progress = training_started
+    if progress_enabled:
+        print(
+            f"{prefix} status=started examples={num_examples} "
+            f"epochs={epochs} optimizer_steps={total_optimizer_steps}",
+            flush=True,
+        )
     task_total = raw_pcr_total = pcr_total = total_total = 0.0
     batches = 0
     supervised_tokens = 0
@@ -93,6 +117,30 @@ def train_client(
             scaler.step(optimizer)
             scaler.update()
             optimizer_steps += 1
+            now = time.perf_counter()
+            should_log = (
+                optimizer_steps == 1
+                or optimizer_steps == total_optimizer_steps
+                or progress_interval == 0
+                or now - last_progress >= progress_interval
+            )
+            if progress_enabled and should_log:
+                elapsed = now - training_started
+                rate = optimizer_steps / max(elapsed, 1e-12)
+                remaining = max(0, total_optimizer_steps - optimizer_steps)
+                eta_seconds = remaining / max(rate, 1e-12)
+                percent = 100.0 * optimizer_steps / max(1, total_optimizer_steps)
+                mean_task_loss = task_total / max(1, batches)
+                mean_total_loss = total_total / max(1, batches)
+                print(
+                    f"{prefix} status=running epoch={_epoch + 1}/{epochs} "
+                    f"step={optimizer_steps}/{total_optimizer_steps} "
+                    f"progress={percent:.1f}% task_loss={mean_task_loss:.6f} "
+                    f"total_loss={mean_total_loss:.6f} "
+                    f"elapsed={elapsed:.0f}s eta={eta_seconds:.0f}s",
+                    flush=True,
+                )
+                last_progress = now
     state = export_adapter(model)
     norm_sq = sum((state[name] - anchor[name]).square().sum() for name in state)
     denominator = max(1, batches)
@@ -107,7 +155,16 @@ def train_client(
         "elapsed_seconds": time.perf_counter() - started,
         "peak_memory_bytes": float(torch.cuda.max_memory_allocated(device)) if device.type == "cuda" else 0.0,
     }
-    num_examples = len(train_loader.dataset) if hasattr(train_loader, "dataset") else batches * int(training["micro_batch_size"])
+    if not num_examples:
+        num_examples = batches * int(training["micro_batch_size"])
+    if progress_enabled:
+        print(
+            f"{prefix} status=completed steps={optimizer_steps} "
+            f"task_loss={metrics['task_loss']:.6f} "
+            f"update_norm={metrics['update_norm']:.6f} "
+            f"elapsed={metrics['elapsed_seconds']:.0f}s",
+            flush=True,
+        )
     del model
     return ClientResult(client_id, state, int(num_examples), metrics)
 

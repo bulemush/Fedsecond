@@ -13,6 +13,7 @@ import torch
 
 from fedproxy.compression.bi import score_blocks
 from fedproxy.compression.prune import build_proxy, select_layers
+from fedproxy.data.audit import audit_prompts
 from fedproxy.data.partition import fixed_subsample, heterogeneous_partition, iid_partition, partition_hash
 from fedproxy.data.prompts import format_alpaca
 from fedproxy.data.registry import dataset_storage_path, load_registered
@@ -181,6 +182,65 @@ def _load_client_examples(cfg: dict, manifest: dict, client_id: str):
     return [convert_row(task, dataset[index], index, dataset) for index in indices]
 
 
+def audit_training_prompts(cfg: dict, manifest: dict | None = None) -> dict:
+    run_dir = Path(cfg["run"]["output_dir"])
+    if manifest is None:
+        manifest = json.loads((run_dir / "data_manifest.json").read_text(encoding="utf-8"))
+    signature = hashlib.sha256(
+        json.dumps({
+            "audit_version": 1,
+            "config": cfg,
+            "partition_hash": manifest["partition_hash"],
+            "dataset_fingerprints": manifest["dataset_fingerprints"],
+        }, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    path = run_dir / "metrics" / "truncation_audit.json"
+    def check_structured(report: dict) -> None:
+        if report["strategy"] != "structured":
+            return
+        invalid = [client_id for client_id, item in report["clients"].items()
+                   if item["cue_missing"] or item["hypothesis_missing"]
+                   or item["choice_label_missing"]]
+        if invalid:
+            raise ValueError(f"Structured truncation lost required task fields: {invalid}")
+
+    if path.exists():
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        if cached.get("signature") == signature:
+            check_structured(cached)
+            print(f"[truncation] using existing audit {path}", flush=True)
+            return cached
+    tokenizer = load_tokenizer(cfg["model"])
+    data_cfg = cfg["data"]
+    clients = {}
+    for client_id in manifest["clients"]:
+        task, _ = _client_task_and_indices(cfg, manifest, client_id)
+        report = audit_prompts(
+            _load_client_examples(cfg, manifest, client_id),
+            tokenizer,
+            int(data_cfg["max_input_length"]),
+            strategy=data_cfg.get("prompt_truncation_strategy", "prefix"),
+            truncation_side=data_cfg.get("input_truncation_side", "right"),
+        )
+        clients[client_id] = {"task": task, **report}
+        print(
+            f"[truncation] client={client_id} task={task} "
+            f"samples={report['samples']} truncated={report['truncation_rate']:.2%} "
+            f"cue_missing={report['cue_missing_rate']:.2%}",
+            flush=True,
+        )
+    result = {
+        "signature": signature,
+        "max_input_length": int(data_cfg["max_input_length"]),
+        "strategy": data_cfg.get("prompt_truncation_strategy", "prefix"),
+        "input_truncation_side": data_cfg.get("input_truncation_side", "right"),
+        "clients": clients,
+    }
+    _write_json(path, result)
+    check_structured(result)
+    return result
+
+
 def _make_client_loader(cfg: dict, examples, tokenizer, *, seed: int | None = None):
     from torch.utils.data import DataLoader
 
@@ -190,6 +250,8 @@ def _make_client_loader(cfg: dict, examples, tokenizer, *, seed: int | None = No
         tokenizer,
         max_input_length=int(cfg["data"]["max_input_length"]),
         max_target_length=int(cfg["data"]["max_target_length"]),
+        prompt_truncation_strategy=cfg["data"].get("prompt_truncation_strategy", "prefix"),
+        input_truncation_side=cfg["data"].get("input_truncation_side", "right"),
     )
     generator = None if seed is None else torch.Generator().manual_seed(seed)
     return DataLoader(
@@ -267,6 +329,8 @@ def _parallel_client_worker(payload: dict):
         conflict,
         loader,
         cfg,
+        round_id=payload["round_id"],
+        device_label=f"cuda:{device_index}",
     )
     result.metrics["visible_device_index"] = float(device_index)
     torch.cuda.empty_cache()
@@ -293,6 +357,8 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
     if not manifest_path.exists():
         raise FileNotFoundError("Run prepare-data before train")
     data_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if cfg["data"].get("truncation_audit", True):
+        audit_training_prompts(cfg, data_manifest)
     config_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
     invariants = {
         "config_hash": config_hash,
@@ -359,12 +425,17 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
     # them on CPU so it does not retain a CUDA model/context before spawning
     # one isolated worker per client GPU.
     initialization_device = torch.device("cpu") if execution == "parallel" else device
+    print(
+        f"[train] status=initializing_global_adapter device={initialization_device}",
+        flush=True,
+    )
     initialized = _load_train_model(proxy_path, cfg, initialization_device)
     initial_adapter = export_adapter(initialized)
     del initialized
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    print("[train] status=global_adapter_ready", flush=True)
 
     train_one = None
     train_many = None
@@ -382,7 +453,16 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
                 collate_fn=template.collate_fn,
                 generator=torch.Generator().manual_seed(local_seed),
             )
-            return train_client(client_id, model_factory, base, conflict, loader, cfg)
+            return train_client(
+                client_id,
+                model_factory,
+                base,
+                conflict,
+                loader,
+                cfg,
+                round_id=round_id,
+                device_label=str(device),
+            )
     else:
         context = multiprocessing.get_context("spawn")
 
@@ -395,8 +475,16 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
             shared_base = flatten_state(base, state_spec).contiguous().share_memory_()
             shared_conflict = flatten_state(conflict, state_spec).contiguous().share_memory_()
             results = []
+            total_waves = (len(scheduled) + parallelism - 1) // parallelism
             for start in range(0, len(scheduled), parallelism):
                 wave = scheduled[start : start + parallelism]
+                wave_number = start // parallelism + 1
+                print(
+                    f"[federated] round={round_id + 1}/{cfg['federated']['rounds']} "
+                    f"wave={wave_number}/{total_waves} status=started "
+                    f"clients={','.join(wave)}",
+                    flush=True,
+                )
                 payloads = [
                     {
                         "cfg": cfg,
@@ -420,6 +508,11 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
                     # worker processes and their resource sharers exit.
                     if wave:
                         del packed
+                print(
+                    f"[federated] round={round_id + 1}/{cfg['federated']['rounds']} "
+                    f"wave={wave_number}/{total_waves} status=completed",
+                    flush=True,
+                )
             return results
 
     adapter, conflict, history = run_federated(

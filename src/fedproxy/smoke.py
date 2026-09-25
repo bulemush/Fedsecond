@@ -69,8 +69,17 @@ def run_smoke(cfg: dict) -> dict:
         "client_1": _BatchList([_batch(200, model_config.vocab_size)]),
     }
 
-    def train_one(client_id, base, conflict, _round):
-        return train_client(client_id, make_model, base, conflict, client_loaders[client_id], cfg)
+    def train_one(client_id, base, conflict, round_id):
+        return train_client(
+            client_id,
+            make_model,
+            base,
+            conflict,
+            client_loaders[client_id],
+            cfg,
+            round_id=round_id,
+            device_label="cpu",
+        )
 
     run_dir = Path(cfg["run"]["output_dir"])
     run_dir.mkdir(parents=True, exist_ok=True)
