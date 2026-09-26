@@ -10,8 +10,8 @@ data:
 training:
   local_epochs: 2
   effective_batch_size: 16
-  micro_batch_size: 1
-  gradient_accumulation_steps: 16
+  micro_batch_size: 2
+  gradient_accumulation_steps: 8
 federated:
   rounds: 3
   client_execution: sequential
