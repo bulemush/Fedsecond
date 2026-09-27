@@ -1,0 +1,15 @@
+# Full-scale LLaMA2-7B run with a 320-token input budget.
+# Retains the parent's 5000-sample cap, 10 local epochs, 10 rounds,
+# and effective client batch size of 16.
+extends: llama2_full_multigpu.yaml
+run:
+  name: llama2_full_len320_mb4_seed42
+  output_dir: runs/llama2_full_len320_mb4_seed42
+  diagnostic: true
+data:
+  max_input_length: 320
+  prompt_truncation_strategy: prefix
+training:
+  effective_batch_size: 16
+  micro_batch_size: 4
+  gradient_accumulation_steps: 4

@@ -16,6 +16,7 @@ ROOT = Path(__file__).parents[1]
         ("llama2_large_len320.yaml", "parallel", 0),
         ("llama2_large_structured64.yaml", "parallel", 0),
         ("llama2_full_multigpu.yaml", "parallel", 0),
+        ("llama2_full_len320_mb4.yaml", "parallel", 0),
     ],
 )
 def test_experiment_configs_resolve(name, execution, parallelism):
@@ -34,6 +35,19 @@ def test_truncation_ablations_are_isolated():
     assert long_cfg["run"]["reuse_artifacts_from"] == "runs/llama2_large_multigpu"
     assert structured["data"]["max_input_length"] == 64
     assert structured["data"]["prompt_truncation_strategy"] == "structured"
+
+
+def test_full_len320_mb4_preserves_effective_batch_and_full_budget():
+    cfg = load_config(ROOT / "configs" / "experiments" / "llama2_full_len320_mb4.yaml")
+    assert cfg["run"]["output_dir"] == "runs/llama2_full_len320_mb4_seed42"
+    assert cfg["run"]["diagnostic"] is True
+    assert cfg["data"]["max_input_length"] == 320
+    assert cfg["data"]["max_train_samples_per_task"] == 5000
+    assert cfg["training"]["local_epochs"] == 10
+    assert cfg["federated"]["rounds"] == 10
+    assert cfg["training"]["micro_batch_size"] == 4
+    assert cfg["training"]["gradient_accumulation_steps"] == 4
+    assert cfg["training"]["effective_batch_size"] == 16
 
 
 def test_sequential_execution_rejects_parallel_workers():

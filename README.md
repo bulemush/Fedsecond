@@ -93,6 +93,16 @@ GPU 编号不写入 YAML：`CUDA_VISIBLE_DEVICES` 必须在 Python 导入 PyTorc
 
 长时间任务可将上面两条命令中的 `run_experiment.sh` 改为 `launch_experiment.sh`（后台 `nohup`，可断开 Xshell）；仍应等第一项完成、检查结果后再启动第二项。审计写入 `runs/<实验名>/metrics/truncation_audit.json`，评测写入 `runs/<实验名>/evaluation/fused_summary.json`。64-token 结构化审计如发现答案提示、NLI 假设或选项标签丢失，会在训练前报错；不要绕过该检查。320-token 是诊断消融，不是论文 Appendix B 的 64-token 设定。比较原实验和两个新实验的各任务准确率时，还需注意评测采用 lm-eval 的独立提示模板，训练提示的截断率不能直接解释全部评测差距。
 
+## 全规模 320-token、micro batch 4 实验
+
+`configs/experiments/llama2_full_len320_mb4.yaml` 继承全规模配置：最多 5,000 条/任务、10 个本地 epoch、10 轮、多卡客户端并行；输入上限为 320 token，每卡 micro batch 为 4，累积 4 步，有效 batch 仍为 16。独立输出目录是 `runs/llama2_full_len320_mb4_seed42`。由于论文附录使用 64-token 输入，本实验仍标记为 diagnostic。在服务器项目根目录运行：
+
+```bash
+bash scripts/launch_llama2_full_len320_mb4.sh 0,1
+```
+
+脚本使用现有 `nohup` 入口，依次准备数据、截断审计、压缩、预算检查、训练、融合，并评测 original/proxy/fused。运行中可断开 SSH；终端自动显示日志，按 Ctrl+C 只停止查看。第二个参数可指定单个阶段，例如 `bash scripts/launch_llama2_full_len320_mb4.sh 0,1 resume`。完整流程拒绝覆盖已有数据、压缩产物或 checkpoint。原先 2,000 条样本的 320-token 零截断结论不适用于新增样本，须查看本实验的 `metrics/truncation_audit.json`。micro batch 4 在 320-token 下的峰值显存需由服务器实测，不能仅根据旧运行的显存占用推断。
+
 ## 主要实现边界
 
 - 压缩只有论文明确给出的 BI 结构化剪枝，没有臆造 KL 蒸馏。
