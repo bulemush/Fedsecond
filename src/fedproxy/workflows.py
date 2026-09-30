@@ -263,6 +263,16 @@ def _make_client_loader(cfg: dict, examples, tokenizer, *, seed: int | None = No
     )
 
 
+def _proxy_tokenizer_config(cfg: dict, proxy_path: str | Path) -> dict:
+    return {
+        **cfg["model"],
+        "name_or_path": str(proxy_path),
+        "tokenizer_name_or_path": str(proxy_path),
+        "revision": None,
+        "local_files_only": True,
+    }
+
+
 def _load_train_model(proxy_path: str | Path, cfg: dict, device: torch.device):
     from transformers import AutoModelForCausalLM
 
@@ -310,9 +320,7 @@ def _parallel_client_worker(payload: dict):
     device = torch.device(f"cuda:{device_index}")
     local_seed = derived_seed(int(cfg["run"]["seed"]), payload["round_id"], client_id)
     seed_everything(local_seed)
-    tokenizer = load_tokenizer(
-        {**cfg["model"], "name_or_path": payload["proxy_path"], "revision": None}
-    )
+    tokenizer = load_tokenizer(_proxy_tokenizer_config(cfg, payload["proxy_path"]))
     examples = _load_client_examples(cfg, payload["manifest"], client_id)
     loader = _make_client_loader(cfg, examples, tokenizer, seed=local_seed)
 
@@ -360,16 +368,7 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
     if cfg["data"].get("truncation_audit", True):
         audit_cfg = cfg
         if resume:
-            audit_cfg = {
-                **cfg,
-                "model": {
-                    **cfg["model"],
-                    "name_or_path": str(proxy_path),
-                    "tokenizer_name_or_path": str(proxy_path),
-                    "revision": None,
-                    "local_files_only": True,
-                },
-            }
+            audit_cfg = {**cfg, "model": _proxy_tokenizer_config(cfg, proxy_path)}
         audit_training_prompts(audit_cfg, data_manifest)
     config_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
     invariants = {
@@ -392,9 +391,7 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
         loaders = None
     else:
         parallelism = 1
-        tokenizer = load_tokenizer(
-            {**cfg["model"], "name_or_path": str(proxy_path), "revision": None}
-        )
+        tokenizer = load_tokenizer(_proxy_tokenizer_config(cfg, proxy_path))
         loaders = _build_client_loaders(cfg, data_manifest, tokenizer)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
