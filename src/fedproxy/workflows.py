@@ -358,7 +358,19 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
         raise FileNotFoundError("Run prepare-data before train")
     data_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if cfg["data"].get("truncation_audit", True):
-        audit_training_prompts(cfg, data_manifest)
+        audit_cfg = cfg
+        if resume:
+            audit_cfg = {
+                **cfg,
+                "model": {
+                    **cfg["model"],
+                    "name_or_path": str(proxy_path),
+                    "tokenizer_name_or_path": str(proxy_path),
+                    "revision": None,
+                    "local_files_only": True,
+                },
+            }
+        audit_training_prompts(audit_cfg, data_manifest)
     config_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
     invariants = {
         "config_hash": config_hash,
