@@ -11,6 +11,8 @@ CONFIG=$1
 GPU_IDS=$2
 STAGE=${3:-all}
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PROJECT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
+export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ ! -f "$CONFIG" ]]; then
   echo "Config not found: $CONFIG" >&2

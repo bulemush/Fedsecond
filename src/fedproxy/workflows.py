@@ -182,17 +182,25 @@ def _load_client_examples(cfg: dict, manifest: dict, client_id: str):
     return [convert_row(task, dataset[index], index, dataset) for index in indices]
 
 
-def audit_training_prompts(cfg: dict, manifest: dict | None = None) -> dict:
+def audit_training_prompts(
+    cfg: dict,
+    manifest: dict | None = None,
+    *,
+    tokenizer_path: str | Path | None = None,
+) -> dict:
     run_dir = Path(cfg["run"]["output_dir"])
     if manifest is None:
         manifest = json.loads((run_dir / "data_manifest.json").read_text(encoding="utf-8"))
+    audit_signature = {
+        "audit_version": 1,
+        "config": cfg,
+        "partition_hash": manifest["partition_hash"],
+        "dataset_fingerprints": manifest["dataset_fingerprints"],
+    }
+    if tokenizer_path is not None:
+        audit_signature["tokenizer_path"] = str(tokenizer_path)
     signature = hashlib.sha256(
-        json.dumps({
-            "audit_version": 1,
-            "config": cfg,
-            "partition_hash": manifest["partition_hash"],
-            "dataset_fingerprints": manifest["dataset_fingerprints"],
-        }, sort_keys=True, default=str).encode()
+        json.dumps(audit_signature, sort_keys=True, default=str).encode()
     ).hexdigest()
     path = run_dir / "metrics" / "truncation_audit.json"
     def check_structured(report: dict) -> None:
@@ -210,7 +218,16 @@ def audit_training_prompts(cfg: dict, manifest: dict | None = None) -> dict:
             check_structured(cached)
             print(f"[truncation] using existing audit {path}", flush=True)
             return cached
-    tokenizer = load_tokenizer(cfg["model"])
+    tokenizer_cfg = cfg["model"]
+    if tokenizer_path is not None:
+        tokenizer_cfg = {
+            **tokenizer_cfg,
+            "name_or_path": str(tokenizer_path),
+            "tokenizer_name_or_path": str(tokenizer_path),
+            "revision": None,
+            "local_files_only": True,
+        }
+    tokenizer = load_tokenizer(tokenizer_cfg)
     data_cfg = cfg["data"]
     clients = {}
     for client_id in manifest["clients"]:
@@ -263,16 +280,6 @@ def _make_client_loader(cfg: dict, examples, tokenizer, *, seed: int | None = No
     )
 
 
-def _proxy_tokenizer_config(cfg: dict, proxy_path: str | Path) -> dict:
-    return {
-        **cfg["model"],
-        "name_or_path": str(proxy_path),
-        "tokenizer_name_or_path": str(proxy_path),
-        "revision": None,
-        "local_files_only": True,
-    }
-
-
 def _load_train_model(proxy_path: str | Path, cfg: dict, device: torch.device):
     from transformers import AutoModelForCausalLM
 
@@ -320,7 +327,9 @@ def _parallel_client_worker(payload: dict):
     device = torch.device(f"cuda:{device_index}")
     local_seed = derived_seed(int(cfg["run"]["seed"]), payload["round_id"], client_id)
     seed_everything(local_seed)
-    tokenizer = load_tokenizer(_proxy_tokenizer_config(cfg, payload["proxy_path"]))
+    tokenizer = load_tokenizer(
+        {**cfg["model"], "name_or_path": payload["proxy_path"], "revision": None}
+    )
     examples = _load_client_examples(cfg, payload["manifest"], client_id)
     loader = _make_client_loader(cfg, examples, tokenizer, seed=local_seed)
 
@@ -366,10 +375,7 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
         raise FileNotFoundError("Run prepare-data before train")
     data_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if cfg["data"].get("truncation_audit", True):
-        audit_cfg = cfg
-        if resume:
-            audit_cfg = {**cfg, "model": _proxy_tokenizer_config(cfg, proxy_path)}
-        audit_training_prompts(audit_cfg, data_manifest)
+        audit_training_prompts(cfg, data_manifest, tokenizer_path=proxy_path if resume else None)
     config_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
     invariants = {
         "config_hash": config_hash,
@@ -391,7 +397,9 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
         loaders = None
     else:
         parallelism = 1
-        tokenizer = load_tokenizer(_proxy_tokenizer_config(cfg, proxy_path))
+        tokenizer = load_tokenizer(
+            {**cfg["model"], "name_or_path": str(proxy_path), "revision": None}
+        )
         loaders = _build_client_loaders(cfg, data_manifest, tokenizer)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -600,10 +608,13 @@ def evaluate(cfg: dict, model_kind: str) -> dict:
         model_path = run / ("exports/llm_fused" if model_kind == "fused" else "exports/proxy_tuned")
     tasks = list(cfg["evaluation"]["harness_tasks"])
     raw_path = run / "evaluation" / "raw" / f"{model_kind}_lm_eval.json"
+    dtype = str(resolve_dtype(cfg["model"].get("dtype", "auto"))).removeprefix("torch.")
+    print(f"[evaluate] model_kind={model_kind} dtype={dtype} model_path={model_path}", flush=True)
     raw = evaluate_with_lm_eval(
         str(model_path), tasks, raw_path,
         batch_size=int(cfg["evaluation"]["batch_size"]),
         num_fewshot=int(cfg["evaluation"]["num_fewshot"]),
+        dtype=dtype,
     )
     aliases = {"openbookqa": "obqa"}
     metrics = {}
@@ -619,6 +630,7 @@ def evaluate(cfg: dict, model_kind: str) -> dict:
         "num_fewshot": int(cfg["evaluation"]["num_fewshot"]),
         "batch_size": int(cfg["evaluation"]["batch_size"]),
         "primary_metric": cfg["evaluation"]["primary_metric"],
+        "dtype": dtype,
     }
     summary.update({
         "protocol_fingerprint": hashlib.sha256(json.dumps(protocol, sort_keys=True).encode()).hexdigest(),

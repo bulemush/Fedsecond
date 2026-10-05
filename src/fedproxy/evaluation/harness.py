@@ -4,12 +4,20 @@ import json
 from pathlib import Path
 
 
-def evaluate_with_lm_eval(model_path: str, tasks: list[str], output_path: str | Path, batch_size: int = 1, num_fewshot: int = 0):
+def evaluate_with_lm_eval(
+    model_path: str,
+    tasks: list[str],
+    output_path: str | Path,
+    batch_size: int = 1,
+    num_fewshot: int = 0,
+    *,
+    dtype: str = "auto",
+):
     from lm_eval import evaluator
 
     results = evaluator.simple_evaluate(
         model="hf",
-        model_args=f"pretrained={model_path}",
+        model_args=f"pretrained={model_path},dtype={dtype}",
         tasks=tasks,
         num_fewshot=num_fewshot,
         batch_size=batch_size,
@@ -18,4 +26,3 @@ def evaluate_with_lm_eval(model_path: str, tasks: list[str], output_path: str | 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     return results
-
