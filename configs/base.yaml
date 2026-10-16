@@ -90,7 +90,7 @@ evaluation:
   backend: lm_eval
   num_fewshot: 0
   batch_size: 1
-  evaluate_proxy: true
+  evaluate_proxy: false
   evaluate_fused: true
   harness_tasks: [openbookqa, arc_easy, arc_challenge, commonsense_qa, sst2, mrpc, rte, mnli]
   primary_metric: acc

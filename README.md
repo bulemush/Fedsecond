@@ -65,7 +65,7 @@ chmod +x scripts/launch_experiment.sh
 
 后台入口会立即跟随日志并显示每轮、每批客户端、GPU、epoch、优化步、完成百分比、loss、耗时和预计剩余时间。默认约每 30 秒更新一次；按 `Ctrl+C` 只退出日志查看，已通过 `nohup`/`setsid` 启动的训练仍会继续。
 
-第三个参数可以只运行一个阶段：`prepare`、`compress`、`dry-run`、`train`、`resume`、`fuse`、`evaluate`。其中 `evaluate` 会依次评测 original、proxy 和 fused；也可用 `evaluate-original`、`evaluate-proxy` 或 `evaluate-fused` 单独评测。例如：
+第三个参数可以只运行一个阶段：`prepare`、`compress`、`dry-run`、`train`、`resume`、`fuse`、`evaluate`。其中 `evaluate` 默认只评测 fused；如需基线，仍可显式运行 `evaluate-original` 或 `evaluate-proxy`。例如：
 
 ```bash
 ./scripts/run_experiment.sh configs/experiments/llama2_large_multigpu.yaml 0,1 dry-run
@@ -101,7 +101,21 @@ GPU 编号不写入 YAML：`CUDA_VISIBLE_DEVICES` 必须在 Python 导入 PyTorc
 bash scripts/launch_llama2_full_len320_mb4.sh 0,1
 ```
 
-脚本使用现有 `nohup` 入口，依次准备数据、截断审计、压缩、预算检查、训练、融合，并评测 original/proxy/fused。运行中可断开 SSH；终端自动显示日志，按 Ctrl+C 只停止查看。第二个参数可指定单个阶段，例如 `bash scripts/launch_llama2_full_len320_mb4.sh 0,1 resume`。完整流程拒绝覆盖已有数据、压缩产物或 checkpoint。原先 2,000 条样本的 320-token 零截断结论不适用于新增样本，须查看本实验的 `metrics/truncation_audit.json`。micro batch 4 在 320-token 下的峰值显存需由服务器实测，不能仅根据旧运行的显存占用推断。
+脚本使用现有 `nohup` 入口，依次准备数据、截断审计、压缩、预算检查、训练、融合，并仅评测 fused。运行中可断开 SSH；终端自动显示日志，按 Ctrl+C 只停止查看。第二个参数可指定单个阶段，例如 `bash scripts/launch_llama2_full_len320_mb4.sh 0,1 resume`。完整流程拒绝覆盖已有数据、压缩产物或 checkpoint。原先 2,000 条样本的 320-token 零截断结论不适用于新增样本，须查看本实验的 `metrics/truncation_audit.json`。micro batch 4 在 320-token 下的峰值显存需由服务器实测，不能仅根据旧运行的显存占用推断。
+
+## 数据同构实验：8 个任务各训练一个模型
+
+`configs/experiments/llama2_homogeneous_*_len320_mb4.yaml` 提供八个单任务配置。每个任务最多取 3,000 条训练样本，按固定随机种子 IID 分到 4 个客户端；不足 3,000 条的任务使用全部可用训练样本。配置为 320-token、每轮本地 5 epoch、10 聚合轮、micro batch 4、累积 4 步。多卡按客户端并行，GPU 编号仅在启动命令中指定。320-token 与 5 epoch 都不是论文附录的原始设置，因此此套结果标记为 diagnostic。
+
+在服务器项目根目录执行：
+
+```bash
+bash scripts/launch_homogeneous_suite.sh 0,1
+```
+
+这会在 `nohup` 后台依次运行八个任务（而不是同时争用两张 GPU）：每项准备本任务数据、审计、训练、融合、只评测 `evaluate-fused`。首项 OBQA 生成压缩代理，其余任务只复用这个相同基础模型和压缩参数对应的代理；各任务的数据划分、训练、checkpoint 和融合模型相互独立。完成的任务可跳过，部分完成的任务会中止以免覆盖；可指定单项，例如 `bash scripts/launch_homogeneous_suite.sh 0,1 rte`。如果中途训练失败，先用 `bash scripts/run_experiment.sh configs/experiments/llama2_homogeneous_rte_len320_mb4.yaml 0,1 resume` 恢复，再手动执行该任务剩余的 `fuse`、`evaluate-fused` 阶段，并重新运行套件。第一项压缩产物在后续任务完成前不要移动或删除。
+
+每项结果在其 `runs/llama2_homogeneous_<任务>_len320_mb4_seed42/evaluation/fused_summary.json`；全部结束后汇总为 `runs/llama2_homogeneous_suite_len320_mb4_seed42/summary.json`，QA/GLUE 平均值来自八个分别训练的模型。终端按 Ctrl+C 只停止看日志；可通过启动命令打印的日志路径继续 `tail -f`。如需额外评估 original 或 proxy，单独用 `scripts/run_experiment.sh <对应配置> 0,1 evaluate-original` 或 `evaluate-proxy`。
 
 ## 主要实现边界
 

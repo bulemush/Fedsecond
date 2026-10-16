@@ -1,0 +1,23 @@
+# Shared settings for eight independent, single-task IID experiments.
+# 320 tokens and five local epochs are diagnostic deviations from the paper's
+# 64-token, ten-local-epoch setting. Up to 3000 samples are divided among clients.
+extends: llama2_full_len320_mb4.yaml
+run:
+  name: llama2_homogeneous_obqa_len320_mb4_seed42
+  output_dir: runs/llama2_homogeneous_obqa_len320_mb4_seed42
+  diagnostic: true
+data:
+  scenario: homogeneous
+  tasks: [obqa]
+  num_clients: 4
+  max_train_samples_per_task: 3000
+  max_input_length: 320
+training:
+  local_epochs: 5
+  effective_batch_size: 16
+  micro_batch_size: 4
+  gradient_accumulation_steps: 4
+federated:
+  rounds: 10
+evaluation:
+  harness_tasks: [openbookqa]

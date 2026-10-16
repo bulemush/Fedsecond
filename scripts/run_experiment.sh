@@ -3,13 +3,16 @@ set -euo pipefail
 
 if [[ $# -lt 2 || $# -gt 3 ]]; then
   echo "Usage: $0 CONFIG GPU_IDS [STAGE]" >&2
-  echo "  STAGE: all|reuse-audit|reuse-all|audit|prepare|compress|dry-run|train|resume|fuse|evaluate|evaluate-original|evaluate-proxy|evaluate-fused (default: all)" >&2
+  echo "  STAGE: all|reuse-audit|reuse-all|reuse-compression-all|audit|prepare|compress|dry-run|train|resume|fuse|evaluate|evaluate-original|evaluate-proxy|evaluate-fused (default: all; evaluate means fused only)" >&2
   exit 2
 fi
 
 CONFIG=$1
 GPU_IDS=$2
 STAGE=${3:-all}
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PROJECT_DIR=$(cd -- "$SCRIPT_DIR/.." && pwd)
+export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ ! -f "$CONFIG" ]]; then
   echo "Config not found: $CONFIG" >&2
@@ -89,6 +92,57 @@ PY
   done
 }
 
+reuse_compression() {
+  local source_dir source_abs destination expected actual
+  source_dir=$(python - "$CONFIG" <<'PY'
+import sys
+from fedproxy.config import load_config
+
+print(load_config(sys.argv[1])["run"].get("reuse_compression_from", ""))
+PY
+)
+  if [[ -z "$source_dir" ]]; then
+    echo "run.reuse_compression_from is required for reuse-compression-all" >&2
+    exit 2
+  fi
+  if [[ ! -f "$source_dir/compression/compression_manifest.json" || ! -d "$source_dir/compression/proxy" || ! -f "$source_dir/resolved_config.compress.yaml" ]]; then
+    echo "Source run lacks completed compression: $source_dir" >&2
+    exit 2
+  fi
+  python - "$CONFIG" "$source_dir/resolved_config.compress.yaml" <<'PY'
+import sys
+from fedproxy.config import load_config
+
+target = load_config(sys.argv[1])
+source = load_config(sys.argv[2])
+for section in ("model", "compression"):
+    if target[section] != source[section]:
+        raise SystemExit(f"Cannot reuse compression: {section} settings differ")
+if target["data"]["local_dir"] != source["data"]["local_dir"]:
+    raise SystemExit("Cannot reuse compression: data.local_dir differs")
+PY
+  source_abs=$(realpath -- "$source_dir")
+  mkdir -p "$RUN_DIR"
+  if [[ "$(realpath -- "$RUN_DIR")" == "$source_abs" ]]; then
+    echo "Refusing to reuse a run as its own compression source" >&2
+    exit 2
+  fi
+  destination="$RUN_DIR/compression"
+  expected="$source_abs/compression"
+  if [[ -L "$destination" ]]; then
+    actual=$(realpath -- "$destination")
+    if [[ "$actual" != "$expected" ]]; then
+      echo "Existing compression link points elsewhere: $destination" >&2
+      exit 2
+    fi
+  elif [[ -e "$destination" ]]; then
+    echo "Refusing to replace existing compression: $destination" >&2
+    exit 2
+  else
+    ln -s -- "$expected" "$destination"
+  fi
+}
+
 compress() {
   python -m fedproxy.cli compress --config "$CONFIG"
 }
@@ -122,8 +176,6 @@ fuse() {
 }
 
 evaluate() {
-  evaluate_original
-  evaluate_proxy
   evaluate_fused
 }
 
@@ -152,6 +204,15 @@ case "$STAGE" in
   reuse-audit)
     reuse_inputs
     audit
+    ;;
+  reuse-compression-all)
+    prepare
+    audit
+    reuse_compression
+    dry_run
+    train
+    fuse
+    evaluate_fused
     ;;
   reuse-all)
     reuse_inputs

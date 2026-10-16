@@ -18,7 +18,7 @@ from fedproxy.data.partition import fixed_subsample, heterogeneous_partition, ii
 from fedproxy.data.prompts import format_alpaca
 from fedproxy.data.registry import dataset_storage_path, load_registered
 from fedproxy.evaluation.harness import evaluate_with_lm_eval
-from fedproxy.evaluation.report import compare_runs, summarize
+from fedproxy.evaluation.report import compare_runs, summarize, summarize_homogeneous_task
 from fedproxy.federated.client import estimate_optimizer_steps, train_client
 from fedproxy.federated.server import run_federated
 from fedproxy.federated.state import (
@@ -624,7 +624,10 @@ def evaluate(cfg: dict, model_kind: str) -> dict:
         if not candidates:
             raise ValueError(f"No accuracy metric found for lm-eval task {task}")
         metrics[aliases.get(task, task)] = float(task_result[sorted(candidates)[0]])
-    summary = summarize(metrics)
+    if cfg["data"]["scenario"] == "homogeneous":
+        summary = summarize_homogeneous_task(metrics, cfg["data"]["tasks"][0])
+    else:
+        summary = summarize(metrics)
     protocol = {
         "tasks": tasks,
         "num_fewshot": int(cfg["evaluation"]["num_fewshot"]),

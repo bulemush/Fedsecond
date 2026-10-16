@@ -1,0 +1,9 @@
+extends: llama2_homogeneous_base_len320_mb4.yaml
+run:
+  name: llama2_homogeneous_arc_challenge_len320_mb4_seed42
+  output_dir: runs/llama2_homogeneous_arc_challenge_len320_mb4_seed42
+  reuse_compression_from: runs/llama2_homogeneous_obqa_len320_mb4_seed42
+data:
+  tasks: [arc_challenge]
+evaluation:
+  harness_tasks: [arc_challenge]

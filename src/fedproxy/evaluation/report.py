@@ -17,6 +17,12 @@ def summarize(metrics: dict[str, float]) -> dict[str, object]:
     return {"tasks": metrics, "qa_avg": qa, "glue_avg": glue, "all_avg": (qa + glue) / 2}
 
 
+def summarize_homogeneous_task(metrics: dict[str, float], task: str) -> dict[str, object]:
+    if set(metrics) != {task}:
+        raise ValueError(f"Homogeneous evaluation must contain only {task}: {sorted(metrics)}")
+    return {"tasks": metrics, "task": task, "task_accuracy": metrics[task]}
+
+
 def compare_runs(runs_root: str | Path) -> list[dict]:
     rows = []
     for path in Path(runs_root).glob("*/evaluation/summary.json"):
@@ -28,4 +34,3 @@ def compare_runs(runs_root: str | Path) -> list[dict]:
     if len(fingerprints) > 1:
         raise ValueError("Cannot combine runs with different evaluation protocol fingerprints")
     return rows
-

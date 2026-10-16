@@ -58,7 +58,7 @@ Xshell 断开后仍需继续运行时，改用后台入口：
 
 多进程边界上的 LoRA adapter、round base 和 conflict state 都会先打包为单个连续张量，再通过共享内存传输；不会为数百个 LoRA 参数分别打开文件描述符，因此无需依赖提高 `ulimit -n`。
 
-`dry-run` 只解析数据和预算，不装载训练模型。默认 `evaluate` 阶段依次生成 original、proxy、fused 三套结果；若只想补跑一种模型，可使用 `evaluate-original`、`evaluate-proxy` 或 `evaluate-fused`。
+`dry-run` 只解析数据和预算，不装载训练模型。默认 `evaluate` 阶段只生成 fused 结果；需要额外基线时，可显式使用 `evaluate-original` 或 `evaluate-proxy`。
 
 ## 首次验证顺序
 
