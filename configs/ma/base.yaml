@@ -1,5 +1,10 @@
-# Reuses the exact FedProxy model, data, proxy compression and optimizer settings.
+# Match the existing 3000-sample FedProxy baseline used for artifact reuse.
 extends: ../experiments/llama2_full_len320_mb4.yaml
+model:
+  name_or_path: /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf
+  tokenizer_name_or_path: /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf
+data:
+  max_train_samples_per_task: 3000
 run:
   name: llama2_ma_conservative_seed42
   output_dir: runs/llama2_ma_conservative_seed42

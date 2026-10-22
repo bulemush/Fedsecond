@@ -7,11 +7,15 @@ from fedproxy.reuse import check_reuse_compatibility, reuse_differences
 
 
 PROJECT = Path(__file__).resolve().parents[1]
+BASELINE_MODEL = "/home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf"
 
 
 def _configs():
     target = load_config(PROJECT / "configs/ma/dense.yaml")
     source = load_config(PROJECT / "configs/experiments/llama2_full_len320_mb4.yaml")
+    source["model"]["name_or_path"] = BASELINE_MODEL
+    source["model"]["tokenizer_name_or_path"] = BASELINE_MODEL
+    source["data"]["max_train_samples_per_task"] = 3000
     return target, source
 
 

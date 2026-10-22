@@ -4,7 +4,7 @@
 
 本组配置是**任务级数据异质性（non-IID）实验**。configs/ma/base.yaml 继承 configs/experiments/llama2_full_len320_mb4.yaml，后者经 configs/experiments/llama2_full_multigpu.yaml 继承 configs/llama2_heterogeneous_50.yaml 和 configs/base.yaml。最终 data.scenario 为 heterogeneous，共有 8 个客户端和 8 个任务：OBQA、ARC-Easy、ARC-Challenge、CommonsenseQA、SST-2、MRPC、RTE、MNLI。当前数据划分将一个完整任务分给一个客户端；它不是同一任务在各客户端独立同分布的同质性实验，也不代表所有形式的 non-IID 分布。
 
-MA 路径沿用现有 fedproxy-repro 安装与依赖，不需要更换服务器中的 conda 环境，也未在 pyproject.toml 中增加依赖。模型、数据、代理压缩、优化器、联邦轮数和评测配置均继承原 FedProxy 的 320-token 全规模诊断配置。MA 配置改变 LoRA 层的训练与上传范围、上传坐标及服务器对部分观测的处理。
+MA 路径沿用现有 fedproxy-repro 安装与依赖，不需要更换服务器中的 conda 环境，也未在 pyproject.toml 中增加依赖。MA 配置继承原 FedProxy 的 320-token 诊断配置，但在 configs/ma/base.yaml 中覆盖模型与分词器路径，以及每任务训练样本上限，以匹配服务器现有基线的已解析配置（3000 条/任务）。代理压缩、优化器、联邦轮数和评测设置继续继承。MA 另外改变 LoRA 层的训练与上传范围、上传坐标及服务器对部分观测的处理。
 
 现有代码实现了部分 LoRA 层训练、共享轮转锚点、分层上传调度、A/B Top-k、可选公共探针、带来源轮次的客户端残差、FP32 稀疏包（int32、varint 或 Golomb/Rice 索引）、掩码感知的相似度与符号聚合、客户端暂存状态、按轮恢复和成本报告。自适应保留率使用上一轮各客户端训练任务损失的等权平均值，**不是公共开发集损失**；提供的主实验配置使用固定保留率。真实网络传输和稀疏下行同步尚未实现。
 
@@ -21,10 +21,9 @@ MA 路径沿用现有 fedproxy-repro 安装与依赖，不需要更换服务器�
 
 ## 复用相同的基线代理与数据划分
 
-c
-    bash scripts/launch_llama2_full_len320_mb4.sh 0,1
+configs/ma/base.yaml 默认复用 runs/llama2_full_len320_mb4_seed42 的已有压缩代理和数据划分。服务器提供的该基线 `resolved_config.train.yaml` 使用 `/home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf` 作为模型与分词器目录，并将每任务训练样本上限设为 3000；MA 公共配置已按此覆盖继承值。所有 MA 变体都继承这一设置。开始训练前须确认该模型目录仍可读取，因为融合阶段还会加载原始模型。若基线不存在，先建立与 MA 设置一致的基线；仓库现有 `configs/experiments/llama2_full_len320_mb4.yaml` 默认为 5000 条/任务，不能直接用它产生可比较的 3000 条基线。
 
-其中 0,1 是可见的物理 GPU 编号，请按服务器实际情况替换。启动器以 nohup 运行并显示日志；停止查看日志不等于停止后台训练。等基线完成后，再启动 MA 实验。
+    test -r /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf/config.json && echo "基线模型目录可读取"
 
 开始后台任务前，先在项目根目录运行一次无需加载 7B 模型的复用配置检查：
 
@@ -38,7 +37,7 @@ c
 
     bash scripts/launch_experiment.sh configs/ma/dense.yaml 0,1 reuse-all
 
-该命令会打印 PID 与日志路径；按 Ctrl+C 只停止当前终端的日志查看，后台流程继续。确认 Dense-MA 完成并查看融合评测结果后，再对下一配置运行，例如：
+其中 0,1 是可见的物理 GPU 编号，请按服务器实际情况替换。该命令会打印 PID 与日志路径；按 Ctrl+C 只停止当前终端的日志查看，后台流程继续。确认 Dense-MA 完成并查看融合评测结果后，再对下一配置运行，例如：
 
     bash scripts/launch_experiment.sh configs/ma/partial.yaml 0,1 reuse-all
 
