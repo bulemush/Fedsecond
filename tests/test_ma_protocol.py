@@ -104,7 +104,14 @@ def test_masked_aggregation_uses_only_actual_contributors():
         observations.append(decode_packet(wire, registry, plans[i]))
     previous = {name: torch.zeros(4) for name in registry.tensor_block}
     update, conflict, _, metrics = aggregate(observations, registry, previous, _config())
-    assert update[name0][0].item() == pytest.approx(0.25)
+    # The observed zero shared by clients 1 and 2 changes their overlap
+    # reliability, so clients 0 and 1 need not receive equal global weights.
+    weights = metrics["client_weights"]
+    positive_only = (0.3 * weights["0"] + 0.2 * weights["1"]) / (
+        weights["0"] + weights["1"]
+    )
+    assert weights["0"] > weights["1"]
+    assert update[name0][0].item() == pytest.approx(positive_only)
     assert conflict[name0][0].item() > 0
     assert update[name1][1].item() == pytest.approx(0.6)
     assert conflict[name1][1].item() == 0

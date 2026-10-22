@@ -27,15 +27,22 @@ configs/ma/base.yaml 默认从 runs/llama2_full_len320_mb4_seed42 复用产物�
 
 其中 0,1 是可见的物理 GPU 编号，请按服务器实际情况替换。启动器以 nohup 运行并显示日志；停止查看日志不等于停止后台训练。等基线完成后，再启动 MA 实验。
 
-以 Dense-MA 为例，依次执行：
+每个 MA 配置只需启动一条后台命令。reuse-all 会在**同一个 nohup 进程中**依次执行复用基线产物与截断审计、dry-run、train、fuse、evaluate-fused；某一步失败即停止后续步骤。以 Dense-MA 为例：
 
-    bash scripts/run_experiment.sh configs/ma/dense.yaml 0,1 reuse-audit
-    bash scripts/run_experiment.sh configs/ma/dense.yaml 0,1 dry-run
-    bash scripts/run_experiment.sh configs/ma/dense.yaml 0,1 train
-    bash scripts/run_experiment.sh configs/ma/dense.yaml 0,1 fuse
-    bash scripts/run_experiment.sh configs/ma/dense.yaml 0,1 evaluate-fused
+    bash scripts/launch_experiment.sh configs/ma/dense.yaml 0,1 reuse-all
 
-reuse-audit 将基线代理及数据清单链接到独立 MA 运行目录，并检查输入截断；dry-run 检查代理层数、预算和残差调度；train 进行联邦训练；fuse 使用最终 checkpoint 融合完整模型；evaluate-fused 评测融合模型。若基线目录路径不同，只修改 MA 配置的 run.reuse_artifacts_from。MA 报告会核对压缩清单和数据划分哈希。
+该命令会打印 PID 与日志路径；按 Ctrl+C 只停止当前终端的日志查看，后台流程继续。确认 Dense-MA 完成并查看融合评测结果后，再对下一配置运行，例如：
+
+    bash scripts/launch_experiment.sh configs/ma/partial.yaml 0,1 reuse-all
+
+其余主实验配置分别使用：
+
+    bash scripts/launch_experiment.sh configs/ma/rotate.yaml 0,1 reuse-all
+    bash scripts/launch_experiment.sh configs/ma/sparse.yaml 0,1 reuse-all
+    bash scripts/launch_experiment.sh configs/ma/base.yaml 0,1 reuse-all
+    bash scripts/launch_experiment.sh configs/ma/balanced.yaml 0,1 reuse-all
+
+以上命令应**逐项执行并检查结果，不要在同一组 GPU 上同时启动多个配置**。reuse-all 会为每个配置使用独立运行目录；不要对已有完整 checkpoint 的目录再次运行全流程。若基线目录路径不同，只修改 MA 配置的 run.reuse_artifacts_from。MA 报告会核对压缩清单和数据划分哈希。
 
 建议按以下顺序逐项运行，每项使用自己的目录，检查前一项结果后再启动下一项：
 
@@ -56,7 +63,7 @@ reuse-audit 将基线代理及数据清单链接到独立 MA 运行目录，并�
 
 ## 后台训练与中断恢复
 
-需要断开 SSH 时，可将 train 阶段改用现有后台启动器：
+上述 reuse-all 命令已经包含完整流程的 nohup。如果此前已单独完成前置步骤，只想在后台继续 train 阶段，可运行：
 
     bash scripts/launch_experiment.sh configs/ma/base.yaml 0,1 train
 
