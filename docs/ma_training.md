@@ -4,7 +4,7 @@
 
 本组配置是**任务级数据异质性（non-IID）实验**。configs/ma/base.yaml 继承 configs/experiments/llama2_full_len320_mb4.yaml，后者经 configs/experiments/llama2_full_multigpu.yaml 继承 configs/llama2_heterogeneous_50.yaml 和 configs/base.yaml。最终 data.scenario 为 heterogeneous，共有 8 个客户端和 8 个任务：OBQA、ARC-Easy、ARC-Challenge、CommonsenseQA、SST-2、MRPC、RTE、MNLI。当前数据划分将一个完整任务分给一个客户端；它不是同一任务在各客户端独立同分布的同质性实验，也不代表所有形式的 non-IID 分布。
 
-MA 路径沿用现有 fedproxy-repro 安装与依赖，不需要更换服务器中的 conda 环境，也未在 pyproject.toml 中增加依赖。MA 配置继承原 FedProxy 的 320-token 诊断配置，但在 configs/ma/base.yaml 中覆盖模型与分词器路径，以及每任务训练样本上限，以匹配服务器现有基线的已解析配置（3000 条/任务）。代理压缩、优化器、联邦轮数和评测设置继续继承。MA 另外改变 LoRA 层的训练与上传范围、上传坐标及服务器对部分观测的处理。
+MA 路径沿用现有 fedproxy-repro 安装与依赖，不需要更换服务器中的 conda 环境，也未在 pyproject.toml 中增加依赖。MA 配置继承原 FedProxy 的 320-token 诊断配置，但在 configs/ma/base.yaml 中将每任务训练样本上限设为服务器现有基线的 3000，并将已删除的原模型目录声明为迁移到当前重新下载的模型目录。代理压缩、优化器、联邦轮数和评测设置继续继承。MA 另外改变 LoRA 层的训练与上传范围、上传坐标及服务器对部分观测的处理。
 
 现有代码实现了部分 LoRA 层训练、共享轮转锚点、分层上传调度、A/B Top-k、可选公共探针、带来源轮次的客户端残差、FP32 稀疏包（int32、varint 或 Golomb/Rice 索引）、掩码感知的相似度与符号聚合、客户端暂存状态、按轮恢复和成本报告。自适应保留率使用上一轮各客户端训练任务损失的等权平均值，**不是公共开发集损失**；提供的主实验配置使用固定保留率。真实网络传输和稀疏下行同步尚未实现。
 
@@ -21,9 +21,9 @@ MA 路径沿用现有 fedproxy-repro 安装与依赖，不需要更换服务器�
 
 ## 复用相同的基线代理与数据划分
 
-configs/ma/base.yaml 默认复用 runs/llama2_full_len320_mb4_seed42 的已有压缩代理和数据划分。服务器提供的该基线 `resolved_config.train.yaml` 使用 `/home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf` 作为模型与分词器目录，并将每任务训练样本上限设为 3000；MA 公共配置已按此覆盖继承值。所有 MA 变体都继承这一设置。开始训练前须确认该模型目录仍可读取，因为融合阶段还会加载原始模型。若基线不存在，先建立与 MA 设置一致的基线；仓库现有 `configs/experiments/llama2_full_len320_mb4.yaml` 默认为 5000 条/任务，不能直接用它产生可比较的 3000 条基线。
+configs/ma/base.yaml 默认复用 runs/llama2_full_len320_mb4_seed42 的已有压缩代理和数据划分。该基线 `resolved_config.train.yaml` 记录的旧模型目录已被删除，当前模型与分词器均从 `/home/async/data-disk/wjf/wgh/Fedsecond/data/models` 加载。`run.reuse_model_relocation` 明确记录旧目录和新目录，供复用检查及结果报告识别；检查会核对新目录的模型层数、主要结构字段和分词器词表哈希是否与基线压缩清单一致，不加载 7B 权重。由于旧权重已删除，无法逐字节证明新下载的权重与基线完全相同；跨这两次下载的严格权重同一性仍依赖原模型修订版本的外部记录。所有 MA 变体都继承每任务 3000 条样本的设置。若基线不存在，先建立与 MA 设置一致的基线；仓库现有 `configs/experiments/llama2_full_len320_mb4.yaml` 默认为 5000 条/任务，不能直接用它产生可比较的 3000 条基线。
 
-    test -r /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf/config.json && echo "基线模型目录可读取"
+    test -r /home/async/data-disk/wjf/wgh/Fedsecond/data/models/config.json && echo "当前模型目录可读取"
 
 开始后台任务前，先在项目根目录运行一次无需加载 7B 模型的复用配置检查：
 
@@ -31,7 +31,7 @@ configs/ma/base.yaml 默认复用 runs/llama2_full_len320_mb4_seed42 的已有�
       --config configs/ma/dense.yaml \
       --source runs/llama2_full_len320_mb4_seed42
 
-若提示 `Reuse configuration compatible`，即可启动相应配置的 `reuse-all`。若列出 `model.name_or_path`、`data.max_input_length` 等差异，输出会同时显示 MA 值、基线值及读取的 `resolved_config.train.yaml`（无此文件时为 `resolved_config.compress.yaml`）。请按实际基线设置修正 MA 配置继承链，或将 `run.reuse_artifacts_from` 指向设置匹配的基线；不要仅为跳过校验而把不同模型或不同分词器视为同一模型。服务器上可用 `cat runs/llama2_full_len320_mb4_seed42/resolved_config.train.yaml` 核对基线快照。仅文件访问模式、压缩时的设备放置、是否执行截断审计，以及确实解析到同一文件的路径写法，可以不同；实验报告也按这一口径比较共享配置。已有指向正确基线的符号链接可直接复用，无需删除或重新压缩。
+若提示 `Reuse configuration compatible`，即可启动相应配置的 `reuse-all`。若列出其他配置差异，输出会同时显示 MA 值、基线值及读取的 `resolved_config.train.yaml`（无此文件时为 `resolved_config.compress.yaml`）。请按实际基线设置修正 MA 配置继承链，或将 `run.reuse_artifacts_from` 指向设置匹配的基线。模型迁移声明只针对这次已知的旧目录与新目录；换成其他模型目录或分词器会被拦截。服务器上可用 `cat runs/llama2_full_len320_mb4_seed42/resolved_config.train.yaml` 核对基线快照。已有指向正确基线的符号链接可直接复用，无需删除或重新压缩。
 
 每个 MA 配置只需启动一条后台命令。reuse-all 会在**同一个 nohup 进程中**依次执行复用基线产物与截断审计、dry-run、train、fuse、evaluate-fused；某一步失败即停止后续步骤。以 Dense-MA 为例：
 

@@ -1,8 +1,8 @@
-# Match the existing 3000-sample FedProxy baseline used for artifact reuse.
+# Match the existing 3000-sample FedProxy baseline, using its relocated model.
 extends: ../experiments/llama2_full_len320_mb4.yaml
 model:
-  name_or_path: /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf
-  tokenizer_name_or_path: /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf
+  name_or_path: /home/async/data-disk/wjf/wgh/Fedsecond/data/models
+  tokenizer_name_or_path: /home/async/data-disk/wjf/wgh/Fedsecond/data/models
 data:
   max_train_samples_per_task: 3000
 run:
@@ -10,6 +10,9 @@ run:
   output_dir: runs/llama2_ma_conservative_seed42
   diagnostic: true
   reuse_artifacts_from: runs/llama2_full_len320_mb4_seed42
+  reuse_model_relocation:
+    original: /home/async/data-disk/wgh/FedKG/federatedscope/llm/data/models/Llama-2-7b-hf
+    current: /home/async/data-disk/wjf/wgh/Fedsecond/data/models
 ma:
   enabled: true
   schedule:

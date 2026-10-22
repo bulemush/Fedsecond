@@ -72,6 +72,26 @@ def test_report_uses_same_reuse_normalization(tmp_path):
     assert compare(baseline, [candidate])["candidates"][0]["all_delta_pp"] == pytest.approx(-1.0)
 
 
+def test_report_accepts_declared_model_relocation(tmp_path):
+    baseline, candidate = tmp_path / "base", tmp_path / "ma"
+    _run(baseline, False)
+    _run(candidate, True)
+    old_path = "/original/llama2"
+    new_path = "/relocated/llama2"
+    for run, model_path in ((baseline, old_path), (candidate, new_path)):
+        path = run / "resolved_config.train.yaml"
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        config["model"] = {
+            "name_or_path": model_path, "tokenizer_name_or_path": model_path,
+        }
+        if run == candidate:
+            config["run"]["reuse_model_relocation"] = {
+                "original": old_path, "current": new_path,
+            }
+        path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    assert compare(baseline, [candidate])["candidates"][0]["all_delta_pp"] == pytest.approx(-1.0)
+
+
 def test_report_rejects_different_evaluation_protocol(tmp_path):
     baseline, candidate = tmp_path / "base", tmp_path / "ma"
     _run(baseline, False)
