@@ -363,6 +363,10 @@ def _build_client_loaders(cfg: dict, manifest: dict, tokenizer):
 
 
 def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
+    if cfg.get("ma", {}).get("enabled", False):
+        from fedproxy.ma.server import train_ma
+
+        return train_ma(cfg, resume=resume, dry_run=dry_run)
     from torch.utils.data import DataLoader
 
     seed_everything(int(cfg["run"]["seed"]))
@@ -642,6 +646,9 @@ def evaluate(cfg: dict, model_kind: str) -> dict:
         "synthetic": bool(cfg["run"].get("synthetic", False)),
         "diagnostic": bool(cfg["run"].get("diagnostic", False)),
     })
+    if model_kind == "fused":
+        fusion_manifest = run / "exports" / "llm_fused" / "fusion_manifest.json"
+        summary["fusion_manifest_sha256"] = hashlib.sha256(fusion_manifest.read_bytes()).hexdigest()
     _write_json(run / "evaluation" / f"{model_kind}_summary.json", summary)
     if model_kind == "fused":
         _write_json(run / "evaluation" / "summary.json", summary)

@@ -1,0 +1,7 @@
+extends: base.yaml
+run:
+  name: llama2_ma_probe_seed42
+  output_dir: runs/llama2_ma_probe_seed42
+ma:
+  compression:
+    probe_fraction_of_k: 0.05

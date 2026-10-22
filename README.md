@@ -1,5 +1,8 @@
 # FedProxy Reproduction
 
+FedProxy-MA 的独立实验路径见 [服务器训练说明](docs/ma_training.md)。它沿用当前 FedProxy 的安装环境、模型和训练配置，并增加部分层 LoRA、客户端稀疏传输及掩码聚合。
+每个 MA 配置可用 `bash scripts/launch_experiment.sh configs/ma/dense.yaml 0,1 reuse-all` 独立启动完整的 nohup 流程；将配置名换为 partial、rotate、sparse、base 或 balanced，并在前一个配置完成后再启动下一个。
+
 这是依据用户提供的 `FedProxy.pdf`（arXiv:2604.19015v1）和实施规格完成的方法级复现。它实现 BI block pruning、LoRA A/B 空间的 PCR 与 H-TIES、单机串行客户端隔离、轮次恢复，以及合并 LoRA 后的训练自由层回填。
 
 本项目没有作者源码背书。论文未披露或自相矛盾的细节均记录在 `docs/reproduction_decisions.md`；实现完成不代表论文表格中的数值已经复现。
