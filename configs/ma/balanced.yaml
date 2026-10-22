@@ -1,0 +1,11 @@
+extends: base.yaml
+run:
+  name: llama2_ma_balanced_seed42
+  output_dir: runs/llama2_ma_balanced_seed42
+ma:
+  schedule:
+    train_blocks: 8
+    upload_blocks: 5
+  compression:
+    keep_a: 0.5
+    keep_b: 0.6

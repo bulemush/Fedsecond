@@ -1,0 +1,47 @@
+# Reuses the exact FedProxy model, data, proxy compression and optimizer settings.
+extends: ../experiments/llama2_full_len320_mb4.yaml
+run:
+  name: llama2_ma_conservative_seed42
+  output_dir: runs/llama2_ma_conservative_seed42
+  diagnostic: true
+  reuse_artifacts_from: runs/llama2_full_len320_mb4_seed42
+ma:
+  enabled: true
+  schedule:
+    anchor_blocks: 1
+    train_blocks: 12
+    upload_blocks: 10
+    q_block: 2
+    coverage_window: 1
+    seed: 42
+  pcr:
+    mode: masked_sum
+  compression:
+    retention_mode: fixed
+    keep_a: 0.8
+    keep_b: 0.8
+    probe_fraction_of_k: 0.0
+    index_codec: varint
+    adaptive:
+      keep_min_a: 0.5
+      keep_max_a: 0.9
+      keep_min_b: 0.6
+      keep_max_b: 0.9
+      gamma_a: 1.0
+      gamma_b: 1.0
+      zeta: 0.0
+      loss_ema_decay: 0.9
+  residual:
+    enabled: true
+    max_age: 4
+    decay_mu: 0.1
+  aggregation:
+    beta: 1.0
+    rho: 1.1
+    q_min: 256
+    q0: auto_anchor_numel
+    nu: 1.0
+    n_ref: 3.0
+    xi: 0.9
+    epsilon_update: 1.0e-12
+    server_lr: 1.0
