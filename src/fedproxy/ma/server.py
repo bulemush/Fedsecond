@@ -13,6 +13,7 @@ import torch
 
 from fedproxy.federated.state import ParameterSpec, add_states, flatten_state, zeros_like_state
 from fedproxy.models.lora import export_adapter
+from fedproxy.reuse import check_reuse_compatibility
 from fedproxy.utils.checkpoint import load_checkpoint, save_checkpoint
 from fedproxy.utils.reproducibility import seed_everything
 
@@ -47,7 +48,6 @@ def _round_config(cfg: dict, previous: dict) -> dict:
 
 def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
     from fedproxy.workflows import _load_train_model, audit_training_prompts
-    from fedproxy.config import load_config
 
     run_dir = Path(cfg["run"]["output_dir"])
     proxy_path = run_dir / "compression" / "proxy"
@@ -56,15 +56,7 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
         raise FileNotFoundError("Run prepare-data and compress with this MA configuration before train")
     source = cfg["run"].get("reuse_artifacts_from")
     if source and (run_dir / "compression").is_symlink():
-        source_config = Path(source) / "resolved_config.train.yaml"
-        if not source_config.exists():
-            source_config = Path(source) / "resolved_config.compress.yaml"
-        if not source_config.exists():
-            raise FileNotFoundError("Reused proxy source lacks a resolved configuration")
-        original = load_config(source_config)
-        for section in ("model", "compression", "data"):
-            if cfg[section] != original[section]:
-                raise ValueError(f"Reused proxy/partition has different {section} settings")
+        check_reuse_compatibility(cfg, source)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if cfg["data"].get("truncation_audit", True):
         audit_training_prompts(cfg, manifest, tokenizer_path=proxy_path if resume else None)

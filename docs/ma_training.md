@@ -14,18 +14,25 @@ MA 路径沿用现有 fedproxy-repro 安装与依赖，不需要更换服务器�
 
 在服务器的项目根目录执行；以下命令不创建或切换 conda 环境：
 
-    PYTHONPATH=src pytest -q tests/test_ma_config.py tests/test_ma_protocol.py tests/test_ma_report.py tests/test_ma_tiny_integration.py
+    PYTHONPATH=src pytest -q tests/test_reuse.py tests/test_ma_config.py tests/test_ma_protocol.py tests/test_ma_report.py tests/test_ma_tiny_integration.py
     PYTHONPATH=src python -m fedproxy.cli smoke --config configs/smoke.yaml
 
-第一条检查 MA 配置、协议、报告及无需下载数据的两轮 tiny 模型训练；第二条回归检查原 FedProxy smoke。任一检查失败时，先排查，不要启动完整 7B 训练。
+第一条检查基线复用、MA 配置、协议、报告及无需下载数据的两轮 tiny 模型训练；第二条回归检查原 FedProxy smoke。任一检查失败时，先排查，不要启动完整 7B 训练。
 
 ## 复用相同的基线代理与数据划分
 
-configs/ma/base.yaml 默认从 runs/llama2_full_len320_mb4_seed42 复用产物。该目录必须已有 compression/proxy、compression/compression_manifest.json 和 data_manifest.json。如果原 FedProxy 基线尚不存在，应先运行相同配置的基线；已有完整基线时不要重新执行 all 阶段：
-
+c
     bash scripts/launch_llama2_full_len320_mb4.sh 0,1
 
 其中 0,1 是可见的物理 GPU 编号，请按服务器实际情况替换。启动器以 nohup 运行并显示日志；停止查看日志不等于停止后台训练。等基线完成后，再启动 MA 实验。
+
+开始后台任务前，先在项目根目录运行一次无需加载 7B 模型的复用配置检查：
+
+    PYTHONPATH=src python -m fedproxy.reuse \
+      --config configs/ma/dense.yaml \
+      --source runs/llama2_full_len320_mb4_seed42
+
+若提示 `Reuse configuration compatible`，即可启动相应配置的 `reuse-all`。若列出 `model.name_or_path`、`data.max_input_length` 等差异，输出会同时显示 MA 值、基线值及读取的 `resolved_config.train.yaml`（无此文件时为 `resolved_config.compress.yaml`）。请按实际基线设置修正 MA 配置继承链，或将 `run.reuse_artifacts_from` 指向设置匹配的基线；不要仅为跳过校验而把不同模型或不同分词器视为同一模型。服务器上可用 `cat runs/llama2_full_len320_mb4_seed42/resolved_config.train.yaml` 核对基线快照。仅文件访问模式、压缩时的设备放置、是否执行截断审计，以及确实解析到同一文件的路径写法，可以不同；实验报告也按这一口径比较共享配置。已有指向正确基线的符号链接可直接复用，无需删除或重新压缩。
 
 每个 MA 配置只需启动一条后台命令。reuse-all 会在**同一个 nohup 进程中**依次执行复用基线产物与截断审计、dry-run、train、fuse、evaluate-fused；某一步失败即停止后续步骤。以 Dense-MA 为例：
 

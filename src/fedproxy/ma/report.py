@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from fedproxy.reuse import normalized_reuse_sections
+
 
 def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -16,9 +18,10 @@ def _load(path: Path) -> dict:
 def summarize_run(path: str | Path) -> dict:
     run = Path(path)
     resolved = yaml.safe_load((run / "resolved_config.train.yaml").read_text(encoding="utf-8"))
-    shared_config = {name: resolved[name] for name in (
-        "model", "compression", "data", "lora", "training", "federated", "pcr", "h_ties"
-    )}
+    shared_config = {
+        **normalized_reuse_sections(resolved),
+        **{name: resolved[name] for name in ("lora", "training", "federated", "pcr", "h_ties")},
+    }
     shared_hash = hashlib.sha256(json.dumps(shared_config, sort_keys=True).encode()).hexdigest()
     evaluation = _load(run / "evaluation" / "fused_summary.json")
     raw_eval = _load(run / "evaluation" / "raw" / "fused_lm_eval.json")

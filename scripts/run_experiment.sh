@@ -68,6 +68,7 @@ PY
     echo "Source run lacks compression or data manifest: $source_dir" >&2
     exit 2
   fi
+  python -m fedproxy.reuse --config "$CONFIG" --source "$source_dir"
   source_abs=$(realpath -- "$source_dir")
   mkdir -p "$RUN_DIR"
   if [[ "$(realpath -- "$RUN_DIR")" == "$source_abs" ]]; then

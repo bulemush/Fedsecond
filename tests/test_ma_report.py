@@ -56,6 +56,22 @@ def test_report_compares_only_matching_runs(tmp_path):
     assert result["candidates"][0]["ma_round_wall_seconds"] == 22
 
 
+def test_report_uses_same_reuse_normalization(tmp_path):
+    baseline, candidate = tmp_path / "base", tmp_path / "ma"
+    _run(baseline, False)
+    _run(candidate, True)
+    for run, alias in ((baseline, "model"), (candidate, "model/../model")):
+        model = tmp_path / "model"
+        model.mkdir(exist_ok=True)
+        path = run / "resolved_config.train.yaml"
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        config["model"].update({"name_or_path": str(tmp_path / alias),
+                                "tokenizer_name_or_path": None if run == baseline else str(model)})
+        config["model"]["local_files_only"] = run == baseline
+        path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    assert compare(baseline, [candidate])["candidates"][0]["all_delta_pp"] == pytest.approx(-1.0)
+
+
 def test_report_rejects_different_evaluation_protocol(tmp_path):
     baseline, candidate = tmp_path / "base", tmp_path / "ma"
     _run(baseline, False)
