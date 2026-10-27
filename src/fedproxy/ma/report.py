@@ -52,7 +52,12 @@ def summarize_run(path: str | Path) -> dict:
         raise ValueError(f"MA fused evaluation is not bound to its checkpoint: {run}")
     if is_ma:
         up = sum(int(item["communication_bytes"]["uplink"]) for item in rounds)
-        down = sum(int(item["communication_bytes"]["downlink_fp32_state_estimate"]) for item in rounds)
+        serialized_rounds = sum("downlink" in item["communication_bytes"] for item in rounds)
+        down = sum(int(item["communication_bytes"]["downlink"] if "downlink" in item["communication_bytes"]
+                       else item["communication_bytes"]["downlink_fp32_state_estimate"]) for item in rounds)
+        down_reference = sum(int(item["communication_bytes"]["downlink_fp32_state_estimate"]) for item in rounds)
+        down_accounting = ("serialized_packets" if serialized_rounds == len(rounds) else
+                           "mixed_serialized_and_legacy_estimate" if serialized_rounds else "fp32_state_estimate")
         train_seconds = sum(
             float(client.get("elapsed_seconds", 0))
             for item in rounds for client in item["client_metrics"].values()
@@ -71,6 +76,8 @@ def summarize_run(path: str | Path) -> dict:
     else:
         up = sum(int(item["communication_bytes"]["client_upload_total"]) for item in rounds)
         down = sum(int(item["communication_bytes"]["server_down_total_including_conflict"]) for item in rounds)
+        down_reference = down
+        down_accounting = "raw_fp32_state"
         train_seconds = sum(
             float(client.get("elapsed_seconds", 0))
             for item in rounds for client in item["client_metrics"].values()
@@ -87,12 +94,17 @@ def summarize_run(path: str | Path) -> dict:
         "harness_detail_hash": harness_hash,
         "all_avg": evaluation.get("all_avg"), "qa_avg": evaluation.get("qa_avg"),
         "glue_avg": evaluation.get("glue_avg"), "tasks": evaluation["tasks"],
-        "uplink_bytes": up, "downlink_state_bytes_estimate": down,
+        "uplink_bytes": up, "downlink_bytes": down, "downlink_accounting": down_accounting,
+        "downlink_full_fp32_reference_bytes": down_reference,
+        "total_communication_bytes": up + down,
+        # Compatibility aliases: consult downlink_accounting for the measurement basis.
+        "downlink_state_bytes_estimate": down,
         "total_state_bytes_estimate": up + down,
         "sum_client_train_seconds": train_seconds, "ma_round_wall_seconds": wall_seconds,
         "mean_multi_contributor_observed_fraction": mean_multi,
         "byte_accounting_note": (
-            "MA uplink is serialized packet length; downlink is FP32 P+G state estimate. "
+            "MA uplink is serialized packet length; optimized downlink counts serialized P+active G packets, "
+            "including headers and exact zero/constant encoding. Legacy MA downlink uses the FP32 P+G estimate. "
             "FedProxy counts raw FP32 P/G tensors. Network framing and initialization are excluded."
         ),
     }
@@ -117,6 +129,7 @@ def compare(baseline: str | Path, candidates: list[str | Path]) -> dict:
             else 100 * (item["all_avg"] - base["all_avg"])
         )
         item["uplink_ratio"] = item["uplink_bytes"] / base["uplink_bytes"]
+        item["downlink_ratio"] = item["downlink_bytes"] / base["downlink_bytes"]
         item["total_state_byte_ratio"] = item["total_state_bytes_estimate"] / base["total_state_bytes_estimate"]
         results.append(item)
     return {"baseline": base, "candidates": results,
@@ -176,5 +189,5 @@ def paired_noninferiority(
             pair["candidate"]["total_state_byte_ratio"] for pair in pairs
         ),
         "assumption": "One-sided paired t interval across independent training seeds; inspect distribution and widen seed count if uncertain.",
-        "cost_note": "Ratios compare serialized MA uplink to raw FP32 baseline and estimated state downlink; they do not prove GPU compute savings.",
+        "cost_note": "MA uses serialized packet bytes where available and legacy downlink estimates otherwise; the baseline counts raw FP32 states. These ratios do not prove GPU compute savings.",
     }

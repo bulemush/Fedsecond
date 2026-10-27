@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from .schema import BlockRegistry, ClientPlan
+from .values import decode_values, encode_values
 
 
 @dataclass
@@ -119,9 +120,12 @@ def encode_packet(
     index_codec: str = "varint",
     base_hash: str = "",
     run_hash: str = "",
+    elide_zero: bool = False,
+    elide_constant: bool = False,
 ) -> bytes:
-    if index_codec not in {"int32", "varint", "golomb"}:
+    if index_codec not in {"int32", "varint", "golomb", "bitmap"}:
         raise ValueError("Unsupported index codec")
+    version = 2 if index_codec == "bitmap" or elide_zero or elide_constant else 1
     if client_id != plan.client_id or round_id != plan.round_id:
         raise ValueError("Packet does not match its round plan")
     body = bytearray()
@@ -148,6 +152,12 @@ def encode_packet(
             encoded_idx = idx.astype("<i4").tobytes()
             codec = "int32"
             bit_length = 8 * len(encoded_idx)
+        elif index_codec == "bitmap":
+            mask = np.zeros(entries[name].numel, dtype=np.uint8)
+            mask[idx] = 1
+            encoded_idx = np.packbits(mask, bitorder="little").tobytes()
+            codec = "bitmap"
+            bit_length = entries[name].numel
         elif index_codec == "golomb":
             gaps = np.diff(np.r_[-1, idx]).tolist()
             encoded_idx, bit_length = _rice_encode([int(gap) for gap in gaps])
@@ -159,16 +169,18 @@ def encode_packet(
             bit_length = 8 * len(encoded_idx)
             if len(encoded_idx) >= entries[name].numel * 4 and dense:
                 raise AssertionError("Dense selection failed")
-        encoded_val = val.tobytes()
+        value_codec, encoded_val = encode_values(val, elide_zero=elide_zero, elide_constant=elide_constant)
         description.append({
             "name": name, "count": len(idx), "codec": codec, "index_bytes": len(encoded_idx),
             "value_bytes": len(encoded_val), "freshness": float(freshness),
             "bit_length": bit_length,
         })
+        if version == 2:
+            description[-1]["value_codec"] = value_codec
         body.extend(encoded_idx)
         body.extend(encoded_val)
     header = {
-        "version": 1, "schema_hash": registry.spec.schema_hash, "client_id": client_id,
+        "version": version, "schema_hash": registry.spec.schema_hash, "client_id": client_id,
         "round_id": round_id, "num_examples": int(num_examples), "metrics": metrics,
         "base_hash": base_hash, "run_hash": run_hash,
         "records": description, "body_sha256": hashlib.sha256(body).hexdigest(),
@@ -190,7 +202,8 @@ def decode_packet(
         raise ValueError("Invalid packet header length")
     header = json.loads(wire[4:4 + header_size])
     body = wire[4 + header_size:]
-    if header.get("version") != 1 or header.get("schema_hash") != registry.spec.schema_hash:
+    version = header.get("version")
+    if version not in {1, 2} or header.get("schema_hash") != registry.spec.schema_hash:
         raise ValueError("Packet schema mismatch")
     if header.get("client_id") != plan.client_id or header.get("round_id") != plan.round_id:
         raise ValueError("Packet round/client mismatch")
@@ -213,7 +226,7 @@ def decode_packet(
         count = int(item["count"])
         index_bytes = int(item["index_bytes"])
         value_bytes = int(item["value_bytes"])
-        if count < 0 or count > entries[name].numel or value_bytes != 4 * count:
+        if count < 0 or count > entries[name].numel or index_bytes < 0 or value_bytes < 0:
             raise ValueError("Invalid tensor record length")
         end = offset + index_bytes + value_bytes
         if end > len(body):
@@ -226,6 +239,16 @@ def decode_packet(
             idx = np.arange(count, dtype=np.int64)
         elif codec == "int32" and index_bytes == 4 * count:
             idx = np.frombuffer(raw_idx, dtype="<i4").astype(np.int64)
+        elif codec == "bitmap" and version == 2:
+            size = entries[name].numel
+            if index_bytes != (size + 7) // 8 or int(item["bit_length"]) != size:
+                raise ValueError("Invalid bitmap length")
+            mask = np.unpackbits(np.frombuffer(raw_idx, dtype=np.uint8), bitorder="little")
+            if np.any(mask[size:]):
+                raise ValueError("Non-canonical bitmap padding")
+            idx = np.flatnonzero(mask[:size]).astype(np.int64)
+            if len(idx) != count:
+                raise ValueError("Bitmap count mismatch")
         elif codec == "varint":
             idx = np.cumsum(_read_varints(raw_idx, count)) - 1
         elif codec == "golomb":
@@ -236,9 +259,7 @@ def decode_packet(
             raise ValueError("Invalid decoded indices")
         if registry.tensor_block[name] in plan.anchor_blocks and codec != "dense":
             raise ValueError("Anchor tensor missing dense observations")
-        val = np.frombuffer(raw_val, dtype="<f4").copy()
-        if not np.isfinite(val).all():
-            raise ValueError("Non-finite update value")
+        val = decode_values(raw_val, count, item.get("value_codec", "fp32") if version == 2 else "fp32")
         freshness = float(item["freshness"])
         if not 0 <= freshness <= 1:
             raise ValueError("Invalid freshness")

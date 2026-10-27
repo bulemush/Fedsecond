@@ -75,7 +75,7 @@ def test_codec_round_trip_preserves_observed_zero_and_rejects_corruption():
             records[name] = (torch.arange(4), torch.tensor([0.0, 0.3, 0.0, -0.2]), 1.0)
         else:
             records[name] = (torch.tensor([0, 2]), torch.tensor([0.0, 0.4]), 0.8)
-    for codec in ("int32", "varint", "golomb"):
+    for codec in ("int32", "varint", "golomb", "bitmap"):
         wire = encode_packet("a", 0, registry, plan, records, 3, {"task_loss": 1.0}, index_codec=codec)
         decoded = decode_packet(wire, registry, plan)
         assert decoded.wire_bytes == len(wire)

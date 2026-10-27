@@ -56,6 +56,23 @@ def test_report_compares_only_matching_runs(tmp_path):
     assert result["candidates"][0]["ma_round_wall_seconds"] == 22
 
 
+def test_report_prefers_actual_downlink_bytes_and_keeps_legacy_reference(tmp_path):
+    baseline, candidate = tmp_path / "base", tmp_path / "ma"
+    _run(baseline, False)
+    _run(candidate, True)
+    path = candidate / "checkpoints/round_0001/metadata.json"
+    metadata = json.loads(path.read_text())
+    metadata["communication_bytes"]["downlink"] = 17
+    _write(path, metadata)
+    item = compare(baseline, [candidate])["candidates"][0]
+    assert item["downlink_bytes"] == 17
+    assert item["total_communication_bytes"] == 42
+    assert item["downlink_full_fp32_reference_bytes"] == 50
+    assert item["downlink_accounting"] == "serialized_packets"
+    assert item["downlink_ratio"] == pytest.approx(17 / 200)
+    assert item["total_state_byte_ratio"] == pytest.approx(42 / 300)
+
+
 def test_report_uses_same_reuse_normalization(tmp_path):
     baseline, candidate = tmp_path / "base", tmp_path / "ma"
     _run(baseline, False)

@@ -15,7 +15,7 @@ def test_ma_config_matches_reused_baseline_and_inherits_other_settings():
     expected["model"]["name_or_path"] = current_model
     expected["model"]["tokenizer_name_or_path"] = current_model
     expected["data"]["max_train_samples_per_task"] = 3000
-    for variant in ("base", "balanced", "dense", "partial", "rotate", "sparse", "golomb", "probe", "adaptive"):
+    for variant in ("base", "balanced", "dense", "partial", "rotate", "sparse", "golomb", "probe", "adaptive", "lossless"):
         ma = load_config(project / "configs/ma" / f"{variant}.yaml")
         for section in ("model", "compression", "data", "lora", "training", "federated", "pcr", "h_ties"):
             assert ma[section] == expected[section]
@@ -31,3 +31,14 @@ def test_ma_rejects_unimplemented_multi_round_coverage_window():
     cfg["ma"]["schedule"]["coverage_window"] = 2
     with pytest.raises(ConfigError, match="not implemented"):
         validate_config(cfg, command="train")
+
+
+def test_lossless_transport_is_enabled_and_validated():
+    cfg = load_config(Path(__file__).resolve().parents[1] / "configs/ma/base.yaml")
+    assert cfg["ma"]["compression"]["index_codec"] == "bitmap"
+    assert cfg["ma"]["communication"] == {
+        "downlink": "active_conflict", "elide_zero_states": True, "elide_constant_states": True,
+    }
+    cfg["ma"]["communication"]["elide_zero_states"] = "false"
+    with pytest.raises(ConfigError, match="must be boolean"):
+        validate_config(cfg)

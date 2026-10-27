@@ -14,6 +14,7 @@ from fedproxy.models.backbone import load_tokenizer
 from fedproxy.utils.reproducibility import derived_seed, seed_everything
 
 from .codec import encode_packet
+from .downlink import decode_downlink
 from .schema import BlockRegistry, ClientPlan
 
 
@@ -138,8 +139,14 @@ def run_client_job(payload: dict) -> dict:
         device = torch.device(f"cuda:{device_index}")
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    base = unflatten_state(payload["base_vector"], registry.spec)
-    conflict = unflatten_state(payload["conflict_vector"], registry.spec)
+    if "downlink_wire" in payload:
+        base, conflict = decode_downlink(
+            payload["downlink_wire"], registry, plan,
+            expected_base_hash=payload["base_hash"], expected_run_hash=payload["run_hash"],
+        )
+    else:  # Legacy configurations/checkpoints retain the original transport.
+        base = unflatten_state(payload["base_vector"], registry.spec)
+        conflict = unflatten_state(payload["conflict_vector"], registry.spec)
     prior_path = payload.get("prior_state")
     previous = torch.load(prior_path, map_location="cpu", weights_only=True) if prior_path else {}
     proxy_path = payload["proxy_path"]
@@ -167,6 +174,8 @@ def run_client_job(payload: dict) -> dict:
         client_id, round_id, registry, plan, records, result.num_examples, result.metrics,
         index_codec=cfg["ma"]["compression"]["index_codec"],
         base_hash=payload["base_hash"], run_hash=payload["run_hash"],
+        elide_zero=cfg["ma"].get("communication", {}).get("elide_zero_states", False),
+        elide_constant=cfg["ma"].get("communication", {}).get("elide_constant_states", False),
     )
     stage.mkdir(parents=True, exist_ok=True)
     temporary_state = state_path.with_suffix(".pt.tmp")

@@ -153,8 +153,14 @@ def validate_config(cfg: dict[str, Any], command: str | None = None) -> None:
         compression = ma["compression"]
         if compression["retention_mode"] not in {"fixed", "adaptive"}:
             raise ConfigError("Unknown MA retention mode")
-        if compression["index_codec"] not in {"int32", "varint", "golomb"}:
-            raise ConfigError("MA supports int32, varint and Golomb index codecs")
+        if compression["index_codec"] not in {"int32", "varint", "golomb", "bitmap"}:
+            raise ConfigError("MA supports int32, varint, Golomb and bitmap index codecs")
+        communication = ma.get("communication", {})
+        if communication.get("downlink", "full_state") not in {"full_state", "active_conflict"}:
+            raise ConfigError("MA downlink must be full_state or active_conflict")
+        for key in ("elide_zero_states", "elide_constant_states"):
+            if not isinstance(communication.get(key, False), bool):
+                raise ConfigError(f"MA communication.{key} must be boolean")
         if not all(0 < float(compression[f"keep_{factor}"]) <= 1 for factor in ("a", "b")):
             raise ConfigError("MA keep fractions must be in (0, 1]")
         if not 0 <= float(compression["probe_fraction_of_k"]) <= 1:

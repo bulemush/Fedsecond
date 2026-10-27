@@ -1,23 +1,25 @@
 """Offline end-to-end MA path using the same PEFT training helper as real runs."""
 
 import copy
+import hashlib
 
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 
 from fedproxy.config import load_config
 from fedproxy.federated.client import train_client
-from fedproxy.federated.state import ParameterSpec, add_states, zeros_like_state
+from fedproxy.federated.state import ParameterSpec, add_states, flatten_state, zeros_like_state
 from fedproxy.ma.aggregation import aggregate
 from fedproxy.ma.client import build_update
 from fedproxy.ma.codec import decode_packet, encode_packet
+from fedproxy.ma.downlink import decode_downlink, encode_downlink
 from fedproxy.ma.scheduler import plan_round
 from fedproxy.ma.schema import BlockRegistry
 from fedproxy.models.lora import export_adapter, inject_lora, load_adapter, merge_lora_into_proxy
 from fedproxy.smoke import _BatchList, _batch
 
 
-def test_tiny_ma_trains_partial_lora_transports_aggregates_and_merges():
+def _run_tiny_ma(optimized):
     torch.manual_seed(42)
     cfg = load_config("configs/smoke.yaml")
     cfg["ma"] = {
@@ -52,9 +54,17 @@ def test_tiny_ma_trains_partial_lora_transports_aggregates_and_merges():
         observations = []
         for i, client_id in enumerate(client_ids):
             plan = plans[client_id]
+            local_base, local_conflict = global_adapter, conflict
+            if optimized:
+                digest = hashlib.sha256(flatten_state(global_adapter, registry.spec).numpy().tobytes()).hexdigest()
+                downlink = encode_downlink(global_adapter, conflict, registry, plan,
+                                           base_hash=digest, run_hash="tiny")
+                local_base, local_conflict = decode_downlink(
+                    downlink, registry, plan, expected_base_hash=digest, expected_run_hash="tiny",
+                )
             loader = _BatchList([_batch(100 + i, 64)])
             result = train_client(
-                client_id, make_model, global_adapter, conflict, loader, cfg,
+                client_id, make_model, local_base, local_conflict, loader, cfg,
                 round_id=round_id, active_names=set(registry.names_in(plan.train_blocks)),
             )
             for name in set(global_adapter) - set(registry.names_in(plan.train_blocks)):
@@ -63,7 +73,8 @@ def test_tiny_ma_trains_partial_lora_transports_aggregates_and_merges():
                 result.adapter_state, global_adapter, residuals[client_id], registry, plan, cfg
             )
             packet = encode_packet(client_id, round_id, registry, plan, records, result.num_examples,
-                                   result.metrics, index_codec="varint")
+                                   result.metrics, index_codec="bitmap" if optimized else "varint",
+                                   elide_zero=optimized, elide_constant=optimized)
             observations.append(decode_packet(packet, registry, plan))
         merged, conflict, _, _ = aggregate(observations, registry, conflict, cfg)
         global_adapter = add_states(global_adapter, merged)
@@ -73,3 +84,20 @@ def test_tiny_ma_trains_partial_lora_transports_aggregates_and_merges():
     with torch.no_grad():
         logits = merged_model(input_ids=_batch(999, 64, batch_size=1)["input_ids"]).logits
     assert torch.isfinite(logits).all()
+    return global_adapter, conflict, residuals, logits
+
+
+def test_tiny_ma_trains_partial_lora_transports_aggregates_and_merges():
+    reference = _run_tiny_ma(False)
+    optimized = _run_tiny_ma(True)
+
+    def assert_exact(left, right):
+        if isinstance(left, dict):
+            assert set(left) == set(right)
+            for name in left:
+                assert_exact(left[name], right[name])
+        else:
+            assert left.numpy().tobytes() == right.numpy().tobytes()
+
+    for left, right in zip(reference, optimized):
+        assert_exact(left, right)

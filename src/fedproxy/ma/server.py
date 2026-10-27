@@ -20,6 +20,7 @@ from fedproxy.utils.reproducibility import seed_everything
 from .aggregation import aggregate
 from .client import run_client_job
 from .codec import decode_packet
+from .downlink import encode_downlink
 from .scheduler import audit_residual_delivery, plan_round
 from .schema import BlockRegistry
 
@@ -115,6 +116,8 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
     if start > rounds:
         raise ValueError("Resume checkpoint exceeds configured rounds")
     history = []
+    communication = cfg["ma"].get("communication", {})
+    serialized_downlink = communication.get("downlink", "full_state") == "active_conflict"
     for round_id in range(start, rounds):
         started = time.perf_counter()
         round_cfg = _round_config(cfg, previous_meta)
@@ -130,9 +133,9 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
                      "anchor": sorted(plan.anchor_blocks)} for client, plan in plans.items()
         })
         base_vector = flatten_state(base, registry.spec).contiguous()
-        conflict_vector = flatten_state(conflict, registry.spec).contiguous()
+        conflict_vector = None if serialized_downlink else flatten_state(conflict, registry.spec).contiguous()
         base_hash = hashlib.sha256(base_vector.numpy().tobytes()).hexdigest()
-        if execution == "parallel":
+        if execution == "parallel" and not serialized_downlink:
             base_vector.share_memory_()
             conflict_vector.share_memory_()
         jobs = []
@@ -155,14 +158,28 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
             jobs.append({
                 "cfg": client_cfg, "client_id": client, "round_id": round_id,
                 "registry": registry, "plan": plans[client], "proxy_path": str(proxy_path),
-                "manifest": manifest, "base_vector": base_vector, "conflict_vector": conflict_vector,
+                "manifest": manifest,
                 "base_hash": base_hash, "run_hash": config_hash,
                 "prior_state": prior,
                 "stage_dir": str(run_dir / "clients" / client / f"round_{round_id + 1:04d}"),
             })
+            if not serialized_downlink:
+                jobs[-1].update(base_vector=base_vector, conflict_vector=conflict_vector)
         packets = []
+        downlink_packet_bytes = {}
         for start_index in range(0, len(jobs), parallelism):
             wave = jobs[start_index:start_index + parallelism]
+            if serialized_downlink:
+                # Encode only the current wave, avoiding K simultaneous full P copies.
+                for job in wave:
+                    wire = encode_downlink(
+                        base, conflict, registry, job["plan"], base_hash=base_hash, run_hash=config_hash,
+                        elide_zero=communication.get("elide_zero_states", False),
+                        elide_constant=communication.get("elide_constant_states", False),
+                    )
+                    job["downlink_wire"] = wire
+                    downlink_packet_bytes[job["client_id"]] = len(wire)
+                del wire
             if execution == "parallel":
                 for device_index, job in enumerate(wave):
                     job["device_index"] = device_index
@@ -172,6 +189,8 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
                     packets.extend(executor.map(run_client_job, wave))
             else:
                 packets.extend(run_client_job(job) for job in wave)
+            for job in wave:
+                job.pop("downlink_wire", None)
         if [packet["client_id"] for packet in packets] != client_ids:
             raise ValueError("Client packet order/identity differs from scheduled clients")
         observations = []
@@ -195,8 +214,15 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
         smoothing = float(cfg["ma"]["compression"]["adaptive"]["loss_ema_decay"])
         loss_ema = smoothing * prior_ema + (1 - smoothing) * round_loss
         up_bytes = sum(obs.wire_bytes for obs in observations)
-        # The current transport sends a complete FP32 P and G to every worker.
-        down_bytes = len(observations) * 4 * registry.spec.total_numel * 2
+        # Keep the old full-state estimate as a reference, never as optimized traffic.
+        full_down_bytes = len(observations) * 4 * registry.spec.total_numel * 2
+        communication_bytes = {"uplink": up_bytes, "downlink_fp32_state_estimate": full_down_bytes}
+        if serialized_downlink:
+            communication_bytes["downlink"] = sum(downlink_packet_bytes.values())
+            communication_bytes["downlink_active_fp32_state_estimate"] = sum(
+                4 * (registry.spec.total_numel + sum(base[name].numel() for name in
+                     registry.names_in(plan.train_blocks))) for plan in plans.values()
+            )
         metadata = {
             **invariants, "completed_round": round_id + 1,
             "client_states": {
@@ -211,7 +237,9 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
             "initial_loss": initial_loss, "loss_ema": loss_ema,
             "retention_rates": {factor: round_cfg["ma"]["compression"][f"keep_{factor}"] for factor in ("a", "b")},
             "analysis": analysis_metrics,
-            "communication_bytes": {"uplink": up_bytes, "downlink_fp32_state_estimate": down_bytes},
+            "communication_bytes": communication_bytes,
+            "downlink_packet_bytes": downlink_packet_bytes,
+            "downlink_transport": "serialized_active_conflict_v1" if serialized_downlink else "full_fp32_state",
             "round_precommit_seconds": time.perf_counter() - started,
         }
         path = checkpoint_root / f"round_{round_id + 1:04d}"

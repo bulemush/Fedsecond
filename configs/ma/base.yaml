@@ -29,7 +29,7 @@ ma:
     keep_a: 0.8
     keep_b: 0.8
     probe_fraction_of_k: 0.0
-    index_codec: varint
+    index_codec: bitmap
     adaptive:
       keep_min_a: 0.5
       keep_max_a: 0.9
@@ -39,6 +39,10 @@ ma:
       gamma_b: 1.0
       zeta: 0.0
       loss_ema_decay: 0.9
+  communication:
+    downlink: active_conflict
+    elide_zero_states: true
+    elide_constant_states: true
   residual:
     enabled: true
     max_age: 4
