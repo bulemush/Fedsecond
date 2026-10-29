@@ -14,7 +14,7 @@ PYTHONPATH=src python -m fedproxy.ma.homogeneous validate
 
 检查成功会为八个任务分别输出 `[ma-homogeneous] validated task=... epochs=5 clients=4 ...`，进程退出码为 0。该阶段不加载模型权重或训练，不创建任务输出；发生已声明的旧模型目录迁移时会加载分词器核对词表哈希。
 
-每个任务的基线默认来自 `runs/llama2_homogeneous_<task>_len320_mb4_seed42`，必须已有完整的 10 轮 checkpoint、代理、数据划分、最终融合模型及其单任务评测。校验读取基线的实际 `resolved_config.train.yaml`，比较模型、压缩、数据、LoRA、优化器、epoch、batch、轮次、PCR、聚合配置、评测设置和种子。预算不同会逐字段报错，不能用修改历史快照的方式跳过。
+每个任务的代理和数据划分默认复用 `runs/llama2_homogeneous_<task>_len320_mb4_seed42`。该目录需要有训练配置快照、`compression/` 和 `data_manifest.json`。启动检查仍会读取实际 `resolved_config.train.yaml`，核对模型、压缩、数据与原定训练预算。复用来源无需完成训练、融合或评测，套件也不读取其成绩。
 
 公共配置清空了异质性实验的复用来源和模型迁移声明。若基线记录的模型路径正好符合 `configs/ma/base.yaml` 已声明的旧→新迁移，套件将验证结构与分词器词表，并将迁移记录写入该任务的冻结配置。未知模型路径差异仍会报错；旧权重已删除时，结构和词表检查不等于权重逐字节相同的证明。
 
@@ -56,10 +56,10 @@ runs/MA_homogeneous/
   llama2_homogeneous_rte_len320_mb4_seed42/
   llama2_homogeneous_mnli_len320_mb4_seed42/
   summary.json
-  comparison.csv
+  results.csv
 ```
 
-全部所选任务在训练前完成基线检查，并保存各自 `execution_config.yaml`。每项依次执行复用/截断审计、dry-run、训练、融合、单任务 evaluate-fused、严格配对比较。正式 dry-run 检查实际代理层数、四客户端调度与残差上传机会。使用默认 16 层代理时每轮非锚点层有 2～3 个上传客户端。
+全部所选任务在训练前完成配置和复用来源检查，并保存各自 `execution_config.yaml`。每项依次执行复用/截断审计、dry-run、训练、融合、单任务 evaluate-fused，随后保存自身的 `result.json` 并进入下一任务。流程不执行与 FedProxy 的结果比较。正式 dry-run 检查实际代理层数、四客户端调度与残差上传机会。使用默认 16 层代理时每轮非锚点层有 2～3 个上传客户端。
 
 已有正确的压缩和数据符号链接可复用；它们引用的原基线目录在实验期间应保持可读。套件不会移动截图中的原 FedProxy 目录。
 
@@ -83,7 +83,7 @@ bash scripts/launch_ma_homogeneous_suite.sh 0,1 arc_challenge
 
 ```bash
 cat runs/MA_homogeneous/llama2_homogeneous_arc_challenge_len320_mb4_seed42/evaluation/fused_summary.json
-cat runs/MA_homogeneous/llama2_homogeneous_arc_challenge_len320_mb4_seed42/comparison.json
+cat runs/MA_homogeneous/llama2_homogeneous_arc_challenge_len320_mb4_seed42/result.json
 ```
 
 八项全部完成后自动生成汇总，也可重新读取已完成结果：
@@ -91,38 +91,28 @@ cat runs/MA_homogeneous/llama2_homogeneous_arc_challenge_len320_mb4_seed42/compa
 ```bash
 python scripts/summarize_ma_homogeneous_suite.py
 cat runs/MA_homogeneous/summary.json
-cat runs/MA_homogeneous/comparison.csv
+cat runs/MA_homogeneous/results.csv
 ```
 
-`summary.json` 含 MA 各任务 accuracy、QA/GLUE/ALL 平均、本地 FedProxy 对应分数、差值（百分点）及逐项通信统计。`comparison.csv` 提供每任务分数和上行、下行、双向载荷比。QA 为四个 QA 模型各自任务分数的平均，GLUE 同理，ALL 为八项等权平均；不是同一个模型在八项任务上的结果。
+`summary.json` 含 MA 各任务 accuracy、QA/GLUE/ALL 平均和 `task_results` 中的逐项通信、训练耗时记录。`results.csv` 提供每任务 accuracy（0～1）、百分制分数、轮数、epoch、上行/下行/总通信字节及训练耗时。QA 为四个 QA 模型各自任务分数的平均，GLUE 同理，ALL 为八项等权平均；八个模型分别完成各自任务。
 
-比较要求每对任务的训练预算、数据划分、压缩清单和原始 lm-eval 任务配置/版本一致。缺少任意任务或评测过期时拒绝生成不完整平均。若基线评测缺少旧版本融合绑定，结果中的 `evaluation_checkpoint_verified` 会标为 false。若评测协议不一致，应在相同环境重新评测对应融合模型。
+完成检查仅验证当前 MA 的冻结配置、完整训练轮数、最终 checkpoint、融合清单及评测绑定。缺少任意任务或评测过期时拒绝生成不完整平均。独立汇总不读取 FedProxy 的 checkpoint、融合模型或评测，也不计算分差和通信比率。
 
-### `harness_detail_hash mismatch` 的处理
+### 从旧版比较报错恢复
 
-这个错误发生在评测后的配对比较阶段，本身不代表训练失败。例如日志已经输出 OBQA `task_accuracy: 0.35`，随后报错，说明已有评测结果，但尚未通过比较检查。
+旧版可能在 OBQA 已经评测完成后，因为 `harness_detail_hash mismatch` 停止。例如截图中 `configs.openbookqa.metadata.pretrained` 分别指向 FedProxy 和 MA 各自的融合模型目录。当前流程已移除这一比较阶段。
 
-旧代码直接对原始 lm-eval 的 `versions/configs/n-shot` 做哈希。任务配置中的 `<function process_docs at 0x...>` 以及 `functools.partial(...)` 包含随进程变化的函数内存地址，会引起误报。现在只消除这些函数地址，再比较其余完整内容；函数名、partial 参数、提示模板、数据集、评测划分、指标、过滤器、任务版本与 few-shot 仍严格检查。报告同时保留 `harness_detail_raw_hash` 便于追溯，不改写原始评测 JSON。
-
-将本次修改同步到服务器后，重新执行原全套命令：
+将修改同步到服务器后，在原 conda 环境重新执行：
 
 ```bash
 bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
 ```
 
-如果只是函数地址差异，已完成的 OBQA 会输出 `Already complete and verified: obqa`，直接写入比较结果，随后继续其他任务。保留原有 checkpoint、客户端状态与评测文件即可。
+已有完整 MA 结果的 OBQA 会输出 `Already complete and verified: obqa`，保存 `result.json` 后进入 ARC-Easy；不需要补做 FedProxy 的评测。其余任务继续训练、融合和评估。保留原有 checkpoint、客户端状态、冻结配置和评测文件即可，本次修改兼容已有实验。
 
-如果仍报错，新消息会列出具体不同字段，如 `harness.configs.openbookqa.doc_to_text` 或 `harness.versions.openbookqa`。这表示真实任务定义不同，套件会停止，避免反复只重测 MA。可在同一现有 conda 环境中对两组已有融合模型重新评测，再恢复套件；以 OBQA 为例：
+当前入口不再生成或更新 `comparison.json`、`comparison.csv`。旧版留下的同名文件属于历史产物，查看本次结果请使用 `result.json`、`summary.json` 和 `results.csv`。
 
-```bash
-bash scripts/run_experiment.sh runs/llama2_homogeneous_obqa_len320_mb4_seed42/resolved_config.train.yaml 0,1 evaluate-fused
-bash scripts/run_experiment.sh runs/MA_homogeneous/llama2_homogeneous_obqa_len320_mb4_seed42/execution_config.yaml 0,1 evaluate-fused
-bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
-```
-
-重新评测不重新训练或融合模型，不修改历史训练快照。若版本/任务定义仍不同，应根据报出的字段检查本机 lm-eval 任务文件，而不能跳过比较检查。
-
-MA 通信以实际编码包长度计数，原基线以原始 FP32 状态计数，详细口径保留在任务报告中；成本统计排除初始化模型分发和真实网络封装。单种子配对结果只作描述性效果检查，不能证明统计非劣或实际计算时间下降。
+MA 通信以实际编码包长度计数；成本统计排除初始化模型分发和真实网络封装。`sum_client_train_seconds` 为各客户端耗时之和，`ma_round_wall_seconds` 为聚合轮次的墙钟耗时。单种子 MA 结果用于描述当前效果，自身不证明相对其他方法的效果或计算成本变化。
 
 ## 验证代码
 

@@ -1,4 +1,4 @@
-"""Matched, resumable single-task IID MA experiments using existing dependencies."""
+"""Resumable single-task IID MA training and evaluation using existing dependencies."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from fedproxy.config import load_config, save_resolved_config, validate_config
 from fedproxy.data.partition import partition_hash
 from fedproxy.evaluation.report import QA_TASKS, GLUE_TASKS, summarize
 from fedproxy.ma.execution import REQUIRED_PARALLEL_ENV, device_assignment, resolve_parallelism
-from fedproxy.ma.report import HarnessMismatchError, compare, summarize_run
+from fedproxy.ma.report import summarize_run
 from fedproxy.reuse import check_reuse_compatibility, normalized_reuse_sections
 
 
@@ -152,7 +152,7 @@ def task_result(task: str, run: Path, ma: bool) -> dict:
     if cfg["data"]["scenario"] != "homogeneous" or cfg["data"]["tasks"] != [task]:
         raise ValueError(f"Wrong single-task configuration: {run}")
     if cfg["run"].get("synthetic", False):
-        raise ValueError(f"Synthetic run cannot be compared: {run}")
+        raise ValueError(f"Synthetic run cannot be reported as an experiment result: {run}")
     if completed_rounds(run, cfg, ma) != int(cfg["federated"]["rounds"]):
         raise ValueError(f"Not all configured rounds are complete: {run}")
     evaluation = _json(run / "evaluation/fused_summary.json")
@@ -211,7 +211,6 @@ def preflight(task: str, config: dict) -> dict:
         raise ValueError(f"Invalid sample cap or overlapping/unbalanced IID partition: {source}")
     if partition_hash({k: v for k, v in manifest.items() if k != "partition_hash"}) != manifest["partition_hash"]:
         raise ValueError(f"Partition fingerprint does not match its contents: {source}")
-    task_result(task, source, ma=False)
     for filename in ("execution_config.yaml", "resolved_config.train.yaml"):
         path = run / filename
         if path.is_file() and _yaml(path) != cfg:
@@ -225,58 +224,43 @@ def preflight(task: str, config: dict) -> dict:
     return cfg
 
 
-def compare_task(task: str, cfg: dict) -> dict:
-    source = Path(cfg["run"]["reuse_artifacts_from"])
+def verified_task_result(task: str, cfg: dict) -> dict:
+    """Validate only this MA run, without reading any FedProxy evaluation."""
     run = Path(cfg["run"]["output_dir"])
-    baseline = task_result(task, source, ma=False)
-    candidate = task_result(task, run, ma=True)
     saved = _yaml(run / "resolved_config.train.yaml")
     if saved != cfg:
         raise ValueError(f"Saved MA configuration differs from the selected experiment: {run}")
-    if _differences(_shared(saved), _shared(_yaml(source / "resolved_config.train.yaml"))):
-        raise ValueError(f"Baseline settings changed since training: {source}")
-    # Check task definitions after removing only process-local function addresses.
-    pair = compare(source, [run])
-    if baseline["seed"] != candidate["seed"]:
-        raise ValueError(f"Unmatched seeds for {task}")
-    return {"task": task, "baseline": baseline, "candidate": candidate,
-            "accuracy_delta_pp": 100 * (candidate["task_accuracy"] - baseline["task_accuracy"]),
-            "uplink_ratio": pair["candidates"][0]["uplink_ratio"],
-            "downlink_ratio": pair["candidates"][0]["downlink_ratio"],
-            "total_communication_ratio": pair["candidates"][0]["total_state_byte_ratio"]}
+    return task_result(task, run, ma=True)
 
 
 def collect_suite(root: Path = DEFAULT_ROOT) -> dict:
-    pairs = []
+    results = []
     ma_settings = None
     for task in TASKS:
         cfg = _yaml(root / run_name(task) / "execution_config.yaml")
         if ma_settings is not None and cfg["ma"] != ma_settings:
             raise ValueError("Cannot combine tasks trained with different MA configurations")
         ma_settings = cfg["ma"]
-        pairs.append(compare_task(task, cfg))
-    candidate = summarize({item["task"]: item["candidate"]["task_accuracy"] for item in pairs})
-    baseline = summarize({item["task"]: item["baseline"]["task_accuracy"] for item in pairs})
-    return {"scenario": "homogeneous", "model_kind": "fused", "independent_models": 8,
-            **candidate, "baseline": baseline, "task_comparisons": pairs,
-            "qa_delta_pp": 100 * (candidate["qa_avg"] - baseline["qa_avg"]),
-            "glue_delta_pp": 100 * (candidate["glue_avg"] - baseline["glue_avg"]),
-            "all_delta_pp": 100 * (candidate["all_avg"] - baseline["all_avg"]),
-            "inference": "Single-seed descriptive comparison of eight independently trained models; not a non-inferiority proof."}
+        results.append(verified_task_result(task, cfg))
+    scores = summarize({item["task"]: item["task_accuracy"] for item in results})
+    return {"method": "fedproxy_ma", "scenario": "homogeneous", "model_kind": "fused",
+            "independent_models": 8, **scores, "task_results": results,
+            "inference": "Single-seed descriptive results from eight independently trained MA models."}
 
 
 def write_suite_summary(root: Path) -> dict:
     result = collect_suite(root)
     _write(root / "summary.json", result)
-    with (root / "comparison.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        fields = ("task", "fedproxy_accuracy", "ma_accuracy", "delta_pp", "uplink_ratio", "downlink_ratio", "total_communication_ratio")
+    with (root / "results.csv").open("w", encoding="utf-8-sig", newline="") as handle:
+        fields = ("task", "accuracy", "accuracy_percent", "rounds", "local_epochs",
+                  "uplink_bytes", "downlink_bytes", "total_communication_bytes",
+                  "sum_client_train_seconds", "ma_round_wall_seconds")
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        for item in result["task_comparisons"]:
-            writer.writerow({"task": item["task"], "fedproxy_accuracy": item["baseline"]["task_accuracy"],
-                             "ma_accuracy": item["candidate"]["task_accuracy"], "delta_pp": item["accuracy_delta_pp"],
-                             **{key: item[key] for key in fields[4:]}})
-    print(json.dumps({key: result[key] for key in ("qa_avg", "glue_avg", "all_avg", "all_delta_pp")}, ensure_ascii=False), flush=True)
+        for item in result["task_results"]:
+            writer.writerow({"accuracy": item["task_accuracy"], "accuracy_percent": 100 * item["task_accuracy"],
+                             **{key: item[key] for key in fields if key not in {"accuracy", "accuracy_percent"}}})
+    print(json.dumps({key: result[key] for key in ("qa_avg", "glue_avg", "all_avg")}, ensure_ascii=False), flush=True)
     return result
 
 
@@ -330,15 +314,12 @@ def execute_task(task: str, cfg: dict, gpu_ids: str) -> dict:
     frozen = _freeze_config(cfg)
     if (run / "evaluation/fused_summary.json").is_file():
         try:
-            result = compare_task(task, cfg)
-        except HarnessMismatchError:
-            # Re-evaluating MA alone cannot fix genuinely different task definitions.
-            raise
+            result = verified_task_result(task, cfg)
         except (ValueError, FileNotFoundError, KeyError) as error:
             print(f"[ma-homogeneous] Completing/refreshing final fusion and evaluation: {error}", flush=True)
         else:
             print(f"[ma-homogeneous] Already complete and verified: {task}", flush=True)
-            _write(run / "comparison.json", result)
+            _write(run / "result.json", result)
             return result
     _stage("reuse-audit", frozen, gpu_ids)
     finished = completed_rounds(run, cfg, ma=True)
@@ -361,13 +342,14 @@ def execute_task(task: str, cfg: dict, gpu_ids: str) -> dict:
             command.append("--overwrite")
         subprocess.run(command, check=True, cwd=PROJECT)
     _stage("evaluate-fused", frozen, gpu_ids)
-    result = compare_task(task, cfg)
-    _write(run / "comparison.json", result)
+    result = verified_task_result(task, cfg)
+    _write(run / "result.json", result)
+    print(f"[ma-homogeneous] evaluated task={task} accuracy={result['task_accuracy']:.6f}", flush=True)
     return result
 
 
 def main(argv=None) -> None:
-    parser = argparse.ArgumentParser(description="Four-client IID MA suite, matched to the eight FedProxy baselines")
+    parser = argparse.ArgumentParser(description="Train and evaluate eight four-client IID MA models")
     parser.add_argument("action", choices=("validate", "run", "summarize"))
     parser.add_argument("--task", choices=("all", *TASKS), default="all")
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)

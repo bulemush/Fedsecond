@@ -129,7 +129,7 @@ PYTHONPATH=src python -m fedproxy.ma.homogeneous validate
 bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
 ```
 
-原有八个 FedProxy 基线完成后再运行；验证会核对其实际训练快照与预算。套件以 nohup 顺序运行任务，支持同一命令续跑并验证已完成结果，最后生成 `summary.json` 和 `comparison.csv`。详细目录、单任务命令和恢复规则见 [MA 同质性训练说明](docs/ma_homogeneous_training.md)。
+各任务复用原有 FedProxy 目录中的代理和数据划分，验证会核对其实际配置与预算。套件以 nohup 顺序完成 MA 的训练、融合和评估，每项评估后直接进入下一任务，支持同一命令续跑。最后生成仅含 MA 成绩的 `summary.json` 和 `results.csv`。详细目录、单任务命令和恢复规则见 [MA 同质性训练说明](docs/ma_homogeneous_training.md)。
 
 ## 主要实现边界
 

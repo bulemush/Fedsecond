@@ -1,4 +1,5 @@
 import copy
+import csv
 import hashlib
 import json
 import os
@@ -128,6 +129,14 @@ def test_preflight_is_read_only_and_checks_existing_baseline(tmp_path):
     assert not Path(cfg["run"]["output_dir"]).exists()
 
 
+def test_preflight_only_requires_reusable_artifacts_not_baseline_results(tmp_path):
+    cfg, _, source = _fixture(tmp_path)
+    for name in ("checkpoints", "exports", "evaluation"):
+        shutil.rmtree(source / name)
+    assert suite.preflight("obqa", cfg) == cfg
+    assert not Path(cfg["run"]["output_dir"]).exists()
+
+
 @pytest.mark.parametrize("section,key,value", [
     ("training", "local_epochs", 10), ("training", "micro_batch_size", 2),
     ("data", "max_input_length", 64), ("data", "max_train_samples_per_task", 5000),
@@ -184,13 +193,13 @@ def test_known_model_relocation_is_checked_and_recorded(tmp_path, monkeypatch):
     assert suite.preflight("obqa", cfg)["run"]["reuse_model_relocation"] == move
 
 
-def test_comparison_uses_single_task_accuracy_and_real_downlink(tmp_path):
+def test_result_uses_own_single_task_accuracy_and_real_downlink(tmp_path):
     cfg, _, _ = _fixture(tmp_path, candidate=True)
-    pair = suite.compare_task("obqa", cfg)
-    assert pair["accuracy_delta_pp"] == pytest.approx(10)
-    assert pair["uplink_ratio"] == pytest.approx(0.6)
-    assert pair["downlink_ratio"] == pytest.approx(0.55)
-    assert pair["candidate"]["local_epochs"] == 5
+    result = suite.verified_task_result("obqa", cfg)
+    assert result["task_accuracy"] == pytest.approx(0.6)
+    assert result["uplink_bytes"] == 600
+    assert result["downlink_bytes"] == 1100
+    assert result["local_epochs"] == 5
 
 
 def test_stale_fusion_or_wrong_task_cannot_be_reported(tmp_path):
@@ -201,11 +210,11 @@ def test_stale_fusion_or_wrong_task_cannot_be_reported(tmp_path):
     evaluation["fusion_manifest_sha256"] = "stale"
     _write(path, evaluation)
     with pytest.raises(ValueError, match="predates"):
-        suite.compare_task("obqa", cfg)
+        suite.verified_task_result("obqa", cfg)
     evaluation["task"] = "rte"
     _write(path, evaluation)
     with pytest.raises(ValueError, match="Invalid single-task"):
-        suite.compare_task("obqa", cfg)
+        suite.verified_task_result("obqa", cfg)
 
 
 def test_resume_rejects_missing_residual_or_replaced_compression(tmp_path):
@@ -239,40 +248,56 @@ def test_stale_evaluation_is_refreshed_without_retraining_or_refusion(tmp_path, 
     assert calls == ["reuse-audit", "evaluate-fused"]
 
 
-def test_address_only_harness_difference_skips_completed_training_and_evaluation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("difference", ["function_address", "model_path", "task_version"])
+def test_baseline_harness_differences_do_not_rerun_or_block_completed_ma(tmp_path, monkeypatch, difference):
     cfg, _, source = _fixture(tmp_path, candidate=True)
     run = Path(cfg["run"]["output_dir"])
     for directory, address in ((source, "0x123abc"), (run, "0x456def")):
         raw = suite._json(directory / "evaluation/raw/fused_lm_eval.json")
         raw["configs"]["obqa"]["process_docs"] = f"<function process_docs at {address}>"
+        if difference == "model_path":
+            raw["configs"]["obqa"]["metadata"] = {"pretrained": str(directory / "exports/llm_fused")}
+        elif difference == "task_version":
+            raw["versions"]["obqa"] = 1 if directory == source else 2
         _write(directory / "evaluation/raw/fused_lm_eval.json", raw)
     monkeypatch.setattr(suite, "_stage", lambda *args: pytest.fail("Already completed task was rerun"))
+    monkeypatch.setattr("fedproxy.ma.report.compare", lambda *args: pytest.fail("Comparison was called"))
     result = suite.execute_task("obqa", cfg, "0,1")
-    assert result["accuracy_delta_pp"] == pytest.approx(10)
-    assert (run / "comparison.json").is_file()
+    assert result["task_accuracy"] == pytest.approx(0.6)
+    assert (run / "result.json").is_file()
+    assert not (run / "comparison.json").exists()
 
 
-def test_real_harness_difference_does_not_trigger_futile_candidate_reevaluation(tmp_path, monkeypatch):
-    cfg, _, _ = _fixture(tmp_path, candidate=True)
+def test_completed_ma_result_does_not_read_baseline_outputs(tmp_path, monkeypatch):
+    cfg, _, source = _fixture(tmp_path, candidate=True)
     run = Path(cfg["run"]["output_dir"])
-    raw = suite._json(run / "evaluation/raw/fused_lm_eval.json")
-    raw["versions"]["obqa"] = 2
-    _write(run / "evaluation/raw/fused_lm_eval.json", raw)
-    monkeypatch.setattr(suite, "_stage", lambda *args: pytest.fail("Real task mismatch was ignored"))
-    with pytest.raises(suite.HarnessMismatchError, match="versions.obqa"):
-        suite.execute_task("obqa", cfg, "0,1")
+    for name in ("checkpoints", "exports", "evaluation"):
+        shutil.rmtree(source / name)
+    monkeypatch.setattr(suite, "_stage", lambda *args: pytest.fail("Completed MA was rerun"))
+    result = suite.execute_task("obqa", cfg, "0,1")
+    assert result["task_accuracy"] == pytest.approx(0.6)
+    assert (run / "result.json").is_file()
 
 
 def test_collect_all_eight_models_and_refuse_partial_average(tmp_path):
     for task in suite.TASKS:
         _fixture(tmp_path, task, candidate=True)
+    # Standalone MA aggregation must not need any baseline results/configs.
+    shutil.rmtree(tmp_path / "baseline")
     root = tmp_path / "MA_homogeneous"
     result = suite.write_suite_summary(root)
     assert result["independent_models"] == 8
     assert result["all_avg"] == pytest.approx(0.6)
-    assert result["baseline"]["all_avg"] == pytest.approx(0.5)
-    assert result["all_delta_pp"] == pytest.approx(10)
-    assert (root / "summary.json").is_file() and (root / "comparison.csv").is_file()
+    assert "baseline" not in result and "all_delta_pp" not in result
+    assert len(result["task_results"]) == 8
+    assert (root / "summary.json").is_file() and (root / "results.csv").is_file()
+    assert not (root / "comparison.csv").exists()
+    with (root / "results.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 8
+    assert float(rows[0]["accuracy"]) == pytest.approx(0.6)
+    assert float(rows[0]["accuracy_percent"]) == pytest.approx(60)
+    assert int(rows[0]["total_communication_bytes"]) == 1700
     (root / suite.run_name("mnli") / "evaluation/fused_summary.json").unlink()
     with pytest.raises(FileNotFoundError):
         suite.collect_suite(root)
@@ -305,8 +330,8 @@ def test_execute_runs_or_resumes_then_fuses_and_evaluates(tmp_path, monkeypatch,
     result = suite.execute_task("obqa", cfg, "0,1")
     expected = ["reuse-audit"] + (["dry-run", expected_training] if expected_training else []) + ["fuse", "evaluate-fused"]
     assert calls == expected
-    assert result["accuracy_delta_pp"] == pytest.approx(10)
-    assert (run / "comparison.json").is_file()
+    assert result["task_accuracy"] == pytest.approx(0.6)
+    assert (run / "result.json").is_file()
     calls.clear()
     suite.execute_task("obqa", cfg, "0,1")
     assert calls == []  # Completion is verified rather than inferred from a filename.
@@ -315,6 +340,47 @@ def test_execute_runs_or_resumes_then_fuses_and_evaluates(tmp_path, monkeypatch,
 def _candidate_artifacts(run, source):
     shutil.copytree(source / "compression", run / "compression")
     shutil.copyfile(source / "data_manifest.json", run / "data_manifest.json")
+
+
+def test_suite_continues_from_completed_obqa_to_next_training_without_comparison(tmp_path, monkeypatch):
+    configs = {}
+    for task in suite.TASKS:
+        cfg, _, source = _fixture(tmp_path, task, candidate=task != "arc_easy")
+        configs[task] = cfg
+        if task == "obqa":
+            for directory in (source, Path(cfg["run"]["output_dir"])):
+                raw = suite._json(directory / "evaluation/raw/fused_lm_eval.json")
+                raw["configs"][task]["metadata"] = {"pretrained": str(directory / "exports/llm_fused")}
+                _write(directory / "evaluation/raw/fused_lm_eval.json", raw)
+    monkeypatch.setattr(suite, "task_config", lambda task, *args: configs[task])
+    monkeypatch.setattr(suite, "preflight", lambda task, cfg: cfg)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(device_count=lambda: 2)))
+    monkeypatch.setattr("fedproxy.ma.report.compare", lambda *args: pytest.fail("Comparison was called"))
+    calls = []
+    def stage(name, frozen, gpu_ids):
+        cfg = suite._yaml(frozen)
+        task = cfg["data"]["tasks"][0]
+        run = Path(cfg["run"]["output_dir"])
+        calls.append((task, name))
+        if name == "train":
+            _candidate_artifacts(run, Path(cfg["run"]["reuse_artifacts_from"]))
+            save_resolved_config(cfg, run / "resolved_config.train.yaml")
+            _rounds(run, cfg, ma=True)
+        elif name == "evaluate-fused":
+            _evaluation(run, task)
+    def command(arguments, **kwargs):
+        cfg = suite._yaml(Path(arguments[arguments.index("--config") + 1]))
+        calls.append((cfg["data"]["tasks"][0], "fuse"))
+        _fusion(Path(cfg["run"]["output_dir"]))
+    monkeypatch.setattr(suite, "_stage", stage)
+    monkeypatch.setattr(suite.subprocess, "run", command)
+    root = tmp_path / "MA_homogeneous"
+    suite.main(["run", "--root", str(root)])
+    assert calls == [("arc_easy", stage) for stage in ("reuse-audit", "dry-run", "train", "fuse", "evaluate-fused")]
+    summary = suite._json(root / "summary.json")
+    assert summary["all_avg"] == pytest.approx(0.6)
+    assert "baseline" not in summary
+    assert (root / "results.csv").is_file()
 
 
 def test_invalid_later_preflight_prevents_every_training_job(tmp_path, monkeypatch):

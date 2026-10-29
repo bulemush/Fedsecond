@@ -1,4 +1,4 @@
-"""Read and compare eight independently trained MA fused models."""
+"""Summarize eight independently trained MA fused models."""
 
 from pathlib import Path
 import sys
