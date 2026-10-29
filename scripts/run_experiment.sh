@@ -77,11 +77,15 @@ PY
   fi
   for name in compression data_manifest.json; do
     destination="$RUN_DIR/$name"
-    expected="$source_abs/$name"
+    # The source artifact can itself be a link (e.g. ARC-Easy -> OBQA proxy).
+    # Compare both final targets so restarting a valid link chain is idempotent.
+    expected=$(realpath -- "$source_abs/$name")
     if [[ -L "$destination" ]]; then
       actual=$(realpath -- "$destination")
       if [[ "$actual" != "$expected" ]]; then
         echo "Existing link points elsewhere: $destination" >&2
+        echo "  Resolved existing: $actual" >&2
+        echo "  Expected target:   $expected" >&2
         exit 2
       fi
     elif [[ -e "$destination" ]]; then
@@ -129,11 +133,13 @@ PY
     exit 2
   fi
   destination="$RUN_DIR/compression"
-  expected="$source_abs/compression"
+  expected=$(realpath -- "$source_abs/compression")
   if [[ -L "$destination" ]]; then
     actual=$(realpath -- "$destination")
     if [[ "$actual" != "$expected" ]]; then
       echo "Existing compression link points elsewhere: $destination" >&2
+      echo "  Resolved existing: $actual" >&2
+      echo "  Expected target:   $expected" >&2
       exit 2
     fi
   elif [[ -e "$destination" ]]; then

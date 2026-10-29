@@ -63,6 +63,8 @@ runs/MA_homogeneous/
 
 已有正确的压缩和数据符号链接可复用；它们引用的原基线目录在实验期间应保持可读。套件不会移动截图中的原 FedProxy 目录。
 
+原同质性套件中，ARC-Easy 等任务的 `compression` 本身可能链接到 OBQA 的代理。MA 再引用它时会形成多层链接。复用脚本会解析两边的最终路径后核对，支持这种共享代理和重复启动；不需要复制权重或重建已有链接。若链接确实指向其他资源，错误信息会列出实际与预期的最终路径。
+
 ## 单任务与中断恢复
 
 只运行 ARC-Challenge：
@@ -117,7 +119,7 @@ MA 通信以实际编码包长度计数；成本统计排除初始化模型分�
 ## 验证代码
 
 ```bash
-PYTHONPATH=src pytest -q tests/test_ma_homogeneous.py tests/test_ma_execution.py tests/test_ma_config.py tests/test_reuse.py tests/test_ma_report.py tests/test_homogeneous_report.py
+PYTHONPATH=src pytest -q tests/test_ma_homogeneous.py tests/test_ma_execution.py tests/test_ma_config.py tests/test_reuse.py tests/test_reuse_script.py tests/test_ma_report.py tests/test_homogeneous_report.py
 ```
 
 服务器原环境中可补充运行现有 tiny 集成和协议测试：
