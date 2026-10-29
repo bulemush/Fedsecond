@@ -1,0 +1,12 @@
+extends: base.yaml
+run:
+  name: llama2_ma_partial_seed42
+  output_dir: runs/llama2_ma_partial_seed42
+ma:
+  schedule:
+    upload_blocks: 12
+  compression:
+    keep_a: 1.0
+    keep_b: 1.0
+  residual:
+    enabled: false

@@ -57,11 +57,37 @@ def build_parser():
     comparison = sub.add_parser("compare")
     comparison.add_argument("--runs-root", required=True)
     comparison.add_argument("--output", required=True)
+    ma_report = sub.add_parser("ma-report")
+    ma_report.add_argument("--baseline", required=True)
+    ma_report.add_argument("--candidate", action="append", required=True)
+    ma_report.add_argument("--output", required=True)
+    paired = sub.add_parser("ma-paired-report")
+    paired.add_argument("--baseline", action="append", required=True)
+    paired.add_argument("--candidate", action="append", required=True)
+    paired.add_argument("--output", required=True)
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if args.command == "ma-report":
+        from fedproxy.ma.report import compare
+
+        result = compare(args.baseline, args.candidate)
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(json.dumps({"report": str(output)}, ensure_ascii=False))
+        return
+    if args.command == "ma-paired-report":
+        from fedproxy.ma.report import paired_noninferiority
+
+        result = paired_noninferiority(args.baseline, args.candidate)
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(json.dumps({"report": str(output)}, ensure_ascii=False))
+        return
     if args.command == "compare":
         compare(args.runs_root, args.output)
         return

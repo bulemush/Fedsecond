@@ -1,0 +1,5 @@
+# Same MA algorithm as base, with an isolated output directory for the new transport.
+extends: base.yaml
+run:
+  name: llama2_ma_lossless_seed42
+  output_dir: runs/llama2_ma_lossless_seed42

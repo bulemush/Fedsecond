@@ -1,5 +1,8 @@
 # FedProxy Reproduction
 
+FedProxy-MA 的独立实验路径见 [服务器训练说明](docs/ma_training.md)。它沿用当前 FedProxy 的安装环境、模型和训练配置，并增加部分层 LoRA、客户端稀疏传输及掩码聚合。
+每个 MA 配置可用 `bash scripts/launch_experiment.sh configs/ma/dense.yaml 0,1 reuse-all` 独立启动完整的 nohup 流程；将配置名换为 partial、rotate、sparse、base 或 balanced，并在前一个配置完成后再启动下一个。
+
 这是依据用户提供的 `FedProxy.pdf`（arXiv:2604.19015v1）和实施规格完成的方法级复现。它实现 BI block pruning、LoRA A/B 空间的 PCR 与 H-TIES、单机串行客户端隔离、轮次恢复，以及合并 LoRA 后的训练自由层回填。
 
 本项目没有作者源码背书。论文未披露或自相矛盾的细节均记录在 `docs/reproduction_decisions.md`；实现完成不代表论文表格中的数值已经复现。
@@ -116,6 +119,17 @@ bash scripts/launch_homogeneous_suite.sh 0,1
 这会在 `nohup` 后台依次运行八个任务（而不是同时争用两张 GPU）：每项准备本任务数据、审计、训练、融合、只评测 `evaluate-fused`。首项 OBQA 生成压缩代理，其余任务只复用这个相同基础模型和压缩参数对应的代理；各任务的数据划分、训练、checkpoint 和融合模型相互独立。完成的任务可跳过，部分完成的任务会中止以免覆盖；可指定单项，例如 `bash scripts/launch_homogeneous_suite.sh 0,1 rte`。如果中途训练失败，先用 `bash scripts/run_experiment.sh configs/experiments/llama2_homogeneous_rte_len320_mb4.yaml 0,1 resume` 恢复，再手动执行该任务剩余的 `fuse`、`evaluate-fused` 阶段，并重新运行套件。第一项压缩产物在后续任务完成前不要移动或删除。
 
 每项结果在其 `runs/llama2_homogeneous_<任务>_len320_mb4_seed42/evaluation/fused_summary.json`；全部结束后汇总为 `runs/llama2_homogeneous_suite_len320_mb4_seed42/summary.json`，QA/GLUE 平均值来自八个分别训练的模型。终端按 Ctrl+C 只停止看日志；可通过启动命令打印的日志路径继续 `tail -f`。如需额外评估 original 或 proxy，单独用 `scripts/run_experiment.sh <对应配置> 0,1 evaluate-original` 或 `evaluate-proxy`。
+
+## MA 数据同质性实验
+
+`configs/ma/homogeneous/` 提供与上述八个同质性 FedProxy 基线配对的 MA 配置：每任务最多 3000 条样本、4 个 IID 客户端、320-token、5 本地 epoch、10 轮、micro batch 4 × 累积 4；MA 设置完整继承当前 `configs/ma/base.yaml`。所有 MA 结果集中于 `runs/MA_homogeneous/`，每个任务独立训练、融合和评测。
+
+```bash
+PYTHONPATH=src python -m fedproxy.ma.homogeneous validate
+bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
+```
+
+原有八个 FedProxy 基线完成后再运行；验证会核对其实际训练快照与预算。套件以 nohup 顺序运行任务，支持同一命令续跑并验证已完成结果，最后生成 `summary.json` 和 `comparison.csv`。详细目录、单任务命令和恢复规则见 [MA 同质性训练说明](docs/ma_homogeneous_training.md)。
 
 ## 主要实现边界
 
