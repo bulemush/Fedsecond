@@ -1,0 +1,9 @@
+extends: base.yaml
+run:
+  name: llama2_ma_homogeneous_arc_challenge_len320_mb4_seed42
+  output_dir: runs/MA_homogeneous/llama2_homogeneous_arc_challenge_len320_mb4_seed42
+  reuse_artifacts_from: runs/llama2_homogeneous_arc_challenge_len320_mb4_seed42
+data:
+  tasks: [arc_challenge]
+evaluation:
+  harness_tasks: [arc_challenge]

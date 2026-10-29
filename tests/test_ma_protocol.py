@@ -39,9 +39,9 @@ def test_scheduler_keeps_anchor_inside_upload_inside_train():
         assert plan.anchor_blocks <= plan.upload_blocks <= plan.train_blocks
 
 
-@pytest.mark.parametrize("train_budget,upload_budget", [(12, 10), (8, 5)])
+@pytest.mark.parametrize("num_clients,train_budget,upload_budget", [(8, 12, 10), (8, 8, 5), (4, 12, 10)])
 def test_scheduler_revisits_each_clients_trained_layers_before_residual_ttl(
-    train_budget, upload_budget,
+    num_clients, train_budget, upload_budget,
 ):
     # These are the Conservative and Balanced budgets on a 16-block proxy.
     state = {f"model.layers.{block}.q_proj.lora_A.weight": torch.zeros(1)
@@ -50,7 +50,7 @@ def test_scheduler_revisits_each_clients_trained_layers_before_residual_ttl(
     cfg = _config()
     cfg["ma"]["schedule"].update({"train_blocks": train_budget,
                                    "upload_blocks": upload_budget, "q_block": 2})
-    clients = [f"client_{index}" for index in range(8)]
+    clients = [f"client_{index}" for index in range(num_clients)]
     rounds = [plan_round(registry, clients, round_id, cfg) for round_id in range(10)]
     audit = audit_residual_delivery(registry, clients, 10, cfg)
     assert audit["max_observed_wait_rounds"] <= 4

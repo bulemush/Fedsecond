@@ -120,6 +120,17 @@ bash scripts/launch_homogeneous_suite.sh 0,1
 
 每项结果在其 `runs/llama2_homogeneous_<任务>_len320_mb4_seed42/evaluation/fused_summary.json`；全部结束后汇总为 `runs/llama2_homogeneous_suite_len320_mb4_seed42/summary.json`，QA/GLUE 平均值来自八个分别训练的模型。终端按 Ctrl+C 只停止看日志；可通过启动命令打印的日志路径继续 `tail -f`。如需额外评估 original 或 proxy，单独用 `scripts/run_experiment.sh <对应配置> 0,1 evaluate-original` 或 `evaluate-proxy`。
 
+## MA 数据同质性实验
+
+`configs/ma/homogeneous/` 提供与上述八个同质性 FedProxy 基线配对的 MA 配置：每任务最多 3000 条样本、4 个 IID 客户端、320-token、5 本地 epoch、10 轮、micro batch 4 × 累积 4；MA 设置完整继承当前 `configs/ma/base.yaml`。所有 MA 结果集中于 `runs/MA_homogeneous/`，每个任务独立训练、融合和评测。
+
+```bash
+PYTHONPATH=src python -m fedproxy.ma.homogeneous validate
+bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
+```
+
+原有八个 FedProxy 基线完成后再运行；验证会核对其实际训练快照与预算。套件以 nohup 顺序运行任务，支持同一命令续跑并验证已完成结果，最后生成 `summary.json` 和 `comparison.csv`。详细目录、单任务命令和恢复规则见 [MA 同质性训练说明](docs/ma_homogeneous_training.md)。
+
 ## 主要实现边界
 
 - 压缩只有论文明确给出的 BI 结构化剪枝，没有臆造 KL 蒸馏。

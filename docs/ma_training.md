@@ -1,5 +1,7 @@
 # FedProxy-MA 服务器训练说明
 
+四客户端 IID、八任务各自训练一个融合模型的 MA 实验见 [MA 同质性训练说明](ma_homogeneous_training.md)。该套件显式使用 5 个本地 epoch，所有结果集中在 `runs/MA_homogeneous/`。
+
 ## 实验类型与适用范围
 
 本组配置是**任务级数据异质性（non-IID）实验**。configs/ma/base.yaml 继承 configs/experiments/llama2_full_len320_mb4.yaml，后者经 configs/experiments/llama2_full_multigpu.yaml 继承 configs/llama2_heterogeneous_50.yaml 和 configs/base.yaml。最终 data.scenario 为 heterogeneous，共有 8 个客户端和 8 个任务：OBQA、ARC-Easy、ARC-Challenge、CommonsenseQA、SST-2、MRPC、RTE、MNLI。当前数据划分将一个完整任务分给一个客户端；它不是同一任务在各客户端独立同分布的同质性实验，也不代表所有形式的 non-IID 分布。
