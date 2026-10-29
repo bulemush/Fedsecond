@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from fedproxy.ma.report import compare, paired_noninferiority
+from fedproxy.ma.report import HarnessMismatchError, compare, paired_noninferiority
 
 
 def _write(path: Path, data):
@@ -114,6 +114,78 @@ def test_report_rejects_different_evaluation_protocol(tmp_path):
     _run(baseline, False)
     _run(candidate, True, protocol="different")
     with pytest.raises(ValueError, match="Evaluation protocol mismatch"):
+        compare(baseline, [candidate])
+
+
+def _harness(task_function="process_docs", address="0x123abc"):
+    return {"versions": {"openbookqa": 1}, "n-shot": {"openbookqa": 0},
+            "configs": {"openbookqa": {
+                "process_docs": f"<function {task_function} at {address}>",
+                "doc_to_text": f"functools.partial(<function doc_to_text at {address}>, prompt='Q: ')",
+                "filter_list": [{"name": "none", "filter": [{"function": "take_first"}]}],
+                "dataset_path": "allenai/openbookqa", "test_split": "test",
+                "metric_list": [{"metric": "acc"}],
+            }}}
+
+
+def test_harness_comparison_ignores_only_function_memory_addresses(tmp_path):
+    baseline, candidate = tmp_path / "base", tmp_path / "ma"
+    _run(baseline, False)
+    _run(candidate, True)
+    raw = Path("evaluation/raw/fused_lm_eval.json")
+    _write(baseline / raw, _harness(address="0x123abc"))
+    _write(candidate / raw, _harness(address="0xFED456"))
+    saved = (candidate / raw).read_bytes()
+    result = compare(baseline, [candidate])
+    base, ma = result["baseline"], result["candidates"][0]
+    assert base["harness_detail_hash"] == ma["harness_detail_hash"]
+    assert base["harness_detail_raw_hash"] != ma["harness_detail_raw_hash"]
+    assert (candidate / raw).read_bytes() == saved
+
+
+@pytest.mark.parametrize("field", ["function", "prompt", "metric", "dataset", "split", "version", "shots", "filter", "missing"])
+def test_harness_comparison_still_rejects_real_task_differences(tmp_path, field):
+    baseline, candidate = tmp_path / "base", tmp_path / "ma"
+    _run(baseline, False)
+    _run(candidate, True)
+    raw = Path("evaluation/raw/fused_lm_eval.json")
+    _write(baseline / raw, _harness())
+    changed = _harness(address="0xabc456")
+    task = changed["configs"]["openbookqa"]
+    if field == "function":
+        task["process_docs"] = "<function different_process_docs at 0xabc456>"
+    elif field == "prompt":
+        task["doc_to_text"] = "functools.partial(<function doc_to_text at 0xabc456>, prompt='Question: ')"
+    elif field == "metric":
+        task["metric_list"][0]["metric"] = "acc_norm"
+    elif field == "dataset":
+        task["dataset_path"] = "different_dataset"
+    elif field == "split":
+        task["test_split"] = "validation"
+    elif field == "version":
+        changed["versions"]["openbookqa"] = 2
+    elif field == "shots":
+        changed["n-shot"]["openbookqa"] = 1
+    elif field == "filter":
+        task["filter_list"][0]["filter"][0]["function"] = "different_filter"
+    else:
+        del task["dataset_path"]
+    _write(candidate / raw, changed)
+    with pytest.raises(HarnessMismatchError, match="harness_detail_hash mismatch") as error:
+        compare(baseline, [candidate])
+    assert "openbookqa" in str(error.value)
+    assert "Training checkpoints can be retained" in str(error.value)
+
+
+def test_function_address_inside_prompt_text_is_not_ignored(tmp_path):
+    baseline, candidate = tmp_path / "base", tmp_path / "ma"
+    _run(baseline, False)
+    _run(candidate, True)
+    for run, address in ((baseline, "0x123"), (candidate, "0x456")):
+        raw = _harness()
+        raw["configs"]["openbookqa"]["description"] = f"Print <function example at {address}>"
+        _write(run / "evaluation/raw/fused_lm_eval.json", raw)
+    with pytest.raises(HarnessMismatchError, match="description"):
         compare(baseline, [candidate])
 
 

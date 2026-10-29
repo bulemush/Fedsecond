@@ -21,6 +21,7 @@ from .aggregation import aggregate
 from .client import run_client_job
 from .codec import decode_packet
 from .downlink import encode_downlink
+from .execution import client_waves, device_assignment, resolve_parallelism
 from .scheduler import audit_residual_delivery, plan_round
 from .schema import BlockRegistry
 
@@ -59,18 +60,14 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
     if source and (run_dir / "compression").is_symlink():
         check_reuse_compatibility(cfg, source)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    execution = cfg["federated"]["client_execution"]
+    visible = torch.cuda.device_count()
+    parallelism = resolve_parallelism(cfg["federated"], len(manifest["clients"]), visible)
+    mapping = ", ".join(device_assignment(index) for index in range(parallelism)) if execution == "parallel" else "sequential"
+    print(f"[ma] execution={execution} visible_gpus={visible} parallel_clients={parallelism} devices={mapping}", flush=True)
     if cfg["data"].get("truncation_audit", True):
         audit_training_prompts(cfg, manifest, tokenizer_path=proxy_path if resume else None)
     seed_everything(int(cfg["run"]["seed"]))
-    execution = cfg["federated"]["client_execution"]
-    visible = torch.cuda.device_count()
-    if execution == "parallel":
-        requested = int(cfg["federated"]["max_parallel_clients"])
-        parallelism = min(len(manifest["clients"]), visible if requested == 0 else requested)
-        if visible < 1 or parallelism < 1 or parallelism > visible:
-            raise ValueError("MA parallel execution requires enough visible GPUs")
-    else:
-        parallelism = 1
     initial_model = _load_train_model(proxy_path, cfg, torch.device("cpu"))
     initial = export_adapter(initial_model)
     del initial_model
@@ -167,8 +164,12 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
                 jobs[-1].update(base_vector=base_vector, conflict_vector=conflict_vector)
         packets = []
         downlink_packet_bytes = {}
-        for start_index in range(0, len(jobs), parallelism):
-            wave = jobs[start_index:start_index + parallelism]
+        for wave_number, wave in enumerate(client_waves(jobs, parallelism, execution), 1):
+            assignments = ", ".join(
+                f"{job['client_id']}->{device_assignment(job['device_index'])}"
+                if execution == "parallel" else job["client_id"] for job in wave
+            )
+            print(f"[ma] round={round_id + 1}/{rounds} wave={wave_number} {assignments}", flush=True)
             if serialized_downlink:
                 # Encode only the current wave, avoiding K simultaneous full P copies.
                 for job in wave:
@@ -181,8 +182,6 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
                     downlink_packet_bytes[job["client_id"]] = len(wire)
                 del wire
             if execution == "parallel":
-                for device_index, job in enumerate(wave):
-                    job["device_index"] = device_index
                 with ProcessPoolExecutor(
                     max_workers=len(wave), mp_context=multiprocessing.get_context("spawn")
                 ) as executor:

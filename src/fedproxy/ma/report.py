@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import re
 import statistics
+from itertools import islice
 from pathlib import Path
 
 import yaml
@@ -13,6 +15,60 @@ from fedproxy.reuse import normalized_reuse_sections
 
 def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+class HarnessMismatchError(ValueError):
+    """A real task-definition difference that rerunning the candidate cannot fix."""
+
+
+_FUNCTION_REPR = re.compile(r"<function ([\w.<>]+) at 0x[0-9a-fA-F]+>")
+
+
+def _stable_task_config(value):
+    # harness.py uses json.dumps(default=str). TaskConfig callables therefore
+    # contain process-local addresses, including inside functools.partial reprs.
+    # Remove only function addresses; retain names and every other task setting.
+    if isinstance(value, dict):
+        return {key: _stable_task_config(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_stable_task_config(item) for item in value]
+    if isinstance(value, str) and (_FUNCTION_REPR.fullmatch(value) or value.startswith("functools.partial(")):
+        return _FUNCTION_REPR.sub(r"<function \1>", value)
+    return value
+
+
+def _harness_details(raw: dict) -> dict:
+    return {"versions": raw.get("versions"),
+            "configs": _stable_task_config(raw.get("configs")), "n-shot": raw.get("n-shot")}
+
+
+def _detail_differences(baseline, candidate, prefix="harness"):
+    if isinstance(baseline, dict) and isinstance(candidate, dict):
+        for key in sorted(baseline.keys() | candidate.keys()):
+            if key not in baseline or key not in candidate:
+                yield f"{prefix}.{key}: missing in {'baseline' if key not in baseline else 'MA'}"
+            else:
+                yield from _detail_differences(baseline[key], candidate[key], f"{prefix}.{key}")
+    elif isinstance(baseline, list) and isinstance(candidate, list) and len(baseline) == len(candidate):
+        for index, (left, right) in enumerate(zip(baseline, candidate)):
+            yield from _detail_differences(left, right, f"{prefix}[{index}]")
+    elif baseline != candidate:
+        yield f"{prefix}: baseline={repr(baseline)[:240]}, MA={repr(candidate)[:240]}"
+
+
+def _harness_mismatch(baseline: str | Path, candidate: str | Path) -> HarnessMismatchError:
+    relative = Path("evaluation/raw/fused_lm_eval.json")
+    base_file, candidate_file = Path(baseline) / relative, Path(candidate) / relative
+    differences = list(islice(_detail_differences(
+        _harness_details(_load(base_file)), _harness_details(_load(candidate_file))
+    ), 12))
+    return HarnessMismatchError(
+        f"harness_detail_hash mismatch: {candidate}\n"
+        + "\n".join(differences)
+        + f"\nRaw evaluations: {base_file} ; {candidate_file}\n"
+        "Re-evaluate the existing fused models with the same lm-eval task definitions. "
+        "Training checkpoints can be retained."
+    )
 
 
 def summarize_run(path: str | Path) -> dict:
@@ -26,7 +82,8 @@ def summarize_run(path: str | Path) -> dict:
     evaluation = _load(run / "evaluation" / "fused_summary.json")
     raw_eval = _load(run / "evaluation" / "raw" / "fused_lm_eval.json")
     harness_detail = {key: raw_eval.get(key) for key in ("versions", "configs", "n-shot")}
-    harness_hash = hashlib.sha256(json.dumps(harness_detail, sort_keys=True, default=str).encode()).hexdigest()
+    raw_harness_hash = hashlib.sha256(json.dumps(harness_detail, sort_keys=True, default=str).encode()).hexdigest()
+    harness_hash = hashlib.sha256(json.dumps(_harness_details(raw_eval), sort_keys=True).encode()).hexdigest()
     partition_hash = _load(run / "data_manifest.json")["partition_hash"]
     compression_hash = hashlib.sha256(
         (run / "compression" / "compression_manifest.json").read_bytes()
@@ -92,6 +149,8 @@ def summarize_run(path: str | Path) -> dict:
         "shared_training_config_hash": shared_hash,
         "partition_hash": partition_hash, "compression_manifest_hash": compression_hash,
         "harness_detail_hash": harness_hash,
+        "harness_detail_raw_hash": raw_harness_hash,
+        "harness_hash_normalization": "python_function_addresses_v1",
         "all_avg": evaluation.get("all_avg"), "qa_avg": evaluation.get("qa_avg"),
         "glue_avg": evaluation.get("glue_avg"), "tasks": evaluation["tasks"],
         "uplink_bytes": up, "downlink_bytes": down, "downlink_accounting": down_accounting,
@@ -119,9 +178,11 @@ def compare(baseline: str | Path, candidates: list[str | Path]) -> dict:
             raise ValueError(f"Evaluation protocol mismatch: {path}")
         if item["shared_training_config_hash"] != base["shared_training_config_hash"]:
             raise ValueError(f"Shared model/data/training configuration mismatch: {path}")
-        for key in ("partition_hash", "compression_manifest_hash", "harness_detail_hash"):
+        for key in ("partition_hash", "compression_manifest_hash"):
             if item[key] != base[key]:
                 raise ValueError(f"{key} mismatch: {path}")
+        if item["harness_detail_hash"] != base["harness_detail_hash"]:
+            raise _harness_mismatch(baseline, path)
         if item["rounds"] != base["rounds"]:
             raise ValueError(f"Training round mismatch: {path}")
         item["all_delta_pp"] = (

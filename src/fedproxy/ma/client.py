@@ -15,6 +15,7 @@ from fedproxy.utils.reproducibility import derived_seed, seed_everything
 
 from .codec import encode_packet
 from .downlink import decode_downlink
+from .execution import device_assignment
 from .schema import BlockRegistry, ClientPlan
 
 
@@ -130,15 +131,18 @@ def run_client_job(payload: dict) -> dict:
         if not state_path.exists():
             raise ValueError("Staged packet has no matching residual state")
         wire = packet_path.read_bytes()
+        print(f"[ma-client] round={round_id + 1} client={client_id} replayed=True (training already complete)", flush=True)
         return {"client_id": client_id, "wire": wire, "replayed": True,
                 "residual_state_bytes": state_path.stat().st_size}
-    seed_everything(derived_seed(int(cfg["run"]["seed"]), round_id, client_id))
     device_index = payload.get("device_index")
     if device_index is not None:
         torch.cuda.set_device(int(device_index))
         device = torch.device(f"cuda:{device_index}")
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    seed_everything(derived_seed(int(cfg["run"]["seed"]), round_id, client_id))
+    assignment = device_assignment(int(device_index)) if device_index is not None else str(device)
+    print(f"[ma-client] round={round_id + 1} client={client_id} pid={os.getpid()} device={assignment}", flush=True)
     if "downlink_wire" in payload:
         base, conflict = decode_downlink(
             payload["downlink_wire"], registry, plan,

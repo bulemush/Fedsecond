@@ -7,8 +7,8 @@ if [[ $# -gt 2 ]]; then
 fi
 GPU_IDS=${1:-0,1}
 SELECTED=${2:-all}
-if [[ ! "$GPU_IDS" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-  echo "GPU_IDS must be comma-separated physical GPU indices, e.g. 0,1" >&2
+if [[ ! "$GPU_IDS" =~ ^([0-9]+),([0-9]+)$ ]] || [[ "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]]; then
+  echo "This suite requires two distinct GPU IDs, e.g. 0,1 (one client per GPU)." >&2
   exit 2
 fi
 case "$SELECTED" in

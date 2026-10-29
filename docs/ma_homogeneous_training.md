@@ -28,6 +28,20 @@ bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
 
 命令以一个 nohup 后台进程依次运行 OBQA、ARC-Easy、ARC-Challenge、CommonsenseQA、SST-2、MRPC、RTE、MNLI。每个任务内部使用两张 GPU，并行训练两个客户端，分两批完成四客户端一轮；八个任务按顺序执行。日志查看界面按 Ctrl+C 后，后台进程继续。
 
+启动入口要求恰好两个不同的 GPU 编号，并在预检查前设置 CUDA 可见性。如果 PyTorch 实际只识别到一张卡，会报错停止。两卡要求通过运行时环境变量 `FEDPROXY_REQUIRED_PARALLEL_CLIENTS=2` 传递，不修改 YAML、冻结配置或 checkpoint 哈希，因此已有同配置实验可以继续。`max_parallel_clients: 0` 保留自动按可见设备数分配的含义。
+
+训练日志应出现类似内容（客户端编号以实际划分清单为准）：
+
+```text
+[ma] execution=parallel visible_gpus=2 parallel_clients=2 devices=cuda:0(visible_id=0), cuda:1(visible_id=1)
+[ma] round=1/10 wave=1 client_0->cuda:0(visible_id=0), client_1->cuda:1(visible_id=1)
+[ma-client] round=1 client=client_0 pid=... device=cuda:0(visible_id=0)
+[ma-client] round=1 client=client_1 pid=... device=cuda:1(visible_id=1)
+[ma] round=1/10 wave=2 client_2->cuda:0(visible_id=0), client_3->cuda:1(visible_id=1)
+```
+
+若传入 `2,3`，逻辑 `cuda:0/1` 分别对应物理卡 `2/3`。双卡并行针对客户端训练阶段；截断审计、融合和 lm-eval 评测仍按原流程执行，这些阶段只看到单卡负载属于正常现象。重放已完成的客户端上传包时会打印 `replayed=True`，该客户端无需再次占用 GPU 训练。
+
 默认输出结构：
 
 ```text
@@ -84,12 +98,36 @@ cat runs/MA_homogeneous/comparison.csv
 
 比较要求每对任务的训练预算、数据划分、压缩清单和原始 lm-eval 任务配置/版本一致。缺少任意任务或评测过期时拒绝生成不完整平均。若基线评测缺少旧版本融合绑定，结果中的 `evaluation_checkpoint_verified` 会标为 false。若评测协议不一致，应在相同环境重新评测对应融合模型。
 
+### `harness_detail_hash mismatch` 的处理
+
+这个错误发生在评测后的配对比较阶段，本身不代表训练失败。例如日志已经输出 OBQA `task_accuracy: 0.35`，随后报错，说明已有评测结果，但尚未通过比较检查。
+
+旧代码直接对原始 lm-eval 的 `versions/configs/n-shot` 做哈希。任务配置中的 `<function process_docs at 0x...>` 以及 `functools.partial(...)` 包含随进程变化的函数内存地址，会引起误报。现在只消除这些函数地址，再比较其余完整内容；函数名、partial 参数、提示模板、数据集、评测划分、指标、过滤器、任务版本与 few-shot 仍严格检查。报告同时保留 `harness_detail_raw_hash` 便于追溯，不改写原始评测 JSON。
+
+将本次修改同步到服务器后，重新执行原全套命令：
+
+```bash
+bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
+```
+
+如果只是函数地址差异，已完成的 OBQA 会输出 `Already complete and verified: obqa`，直接写入比较结果，随后继续其他任务。保留原有 checkpoint、客户端状态与评测文件即可。
+
+如果仍报错，新消息会列出具体不同字段，如 `harness.configs.openbookqa.doc_to_text` 或 `harness.versions.openbookqa`。这表示真实任务定义不同，套件会停止，避免反复只重测 MA。可在同一现有 conda 环境中对两组已有融合模型重新评测，再恢复套件；以 OBQA 为例：
+
+```bash
+bash scripts/run_experiment.sh runs/llama2_homogeneous_obqa_len320_mb4_seed42/resolved_config.train.yaml 0,1 evaluate-fused
+bash scripts/run_experiment.sh runs/MA_homogeneous/llama2_homogeneous_obqa_len320_mb4_seed42/execution_config.yaml 0,1 evaluate-fused
+bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
+```
+
+重新评测不重新训练或融合模型，不修改历史训练快照。若版本/任务定义仍不同，应根据报出的字段检查本机 lm-eval 任务文件，而不能跳过比较检查。
+
 MA 通信以实际编码包长度计数，原基线以原始 FP32 状态计数，详细口径保留在任务报告中；成本统计排除初始化模型分发和真实网络封装。单种子配对结果只作描述性效果检查，不能证明统计非劣或实际计算时间下降。
 
 ## 验证代码
 
 ```bash
-PYTHONPATH=src pytest -q tests/test_ma_homogeneous.py tests/test_ma_config.py tests/test_reuse.py tests/test_ma_report.py tests/test_homogeneous_report.py
+PYTHONPATH=src pytest -q tests/test_ma_homogeneous.py tests/test_ma_execution.py tests/test_ma_config.py tests/test_reuse.py tests/test_ma_report.py tests/test_homogeneous_report.py
 ```
 
 服务器原环境中可补充运行现有 tiny 集成和协议测试：

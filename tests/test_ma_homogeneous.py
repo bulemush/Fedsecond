@@ -1,8 +1,11 @@
 import copy
 import hashlib
 import json
+import os
 import shutil
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -10,6 +13,11 @@ import yaml
 from fedproxy.config import load_config, save_resolved_config
 from fedproxy.data.partition import partition_hash
 from fedproxy.ma import homogeneous as suite
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime_environment(monkeypatch):
+    monkeypatch.setattr(os, "environ", os.environ.copy())
 
 
 def _write(path, value):
@@ -231,6 +239,30 @@ def test_stale_evaluation_is_refreshed_without_retraining_or_refusion(tmp_path, 
     assert calls == ["reuse-audit", "evaluate-fused"]
 
 
+def test_address_only_harness_difference_skips_completed_training_and_evaluation(tmp_path, monkeypatch):
+    cfg, _, source = _fixture(tmp_path, candidate=True)
+    run = Path(cfg["run"]["output_dir"])
+    for directory, address in ((source, "0x123abc"), (run, "0x456def")):
+        raw = suite._json(directory / "evaluation/raw/fused_lm_eval.json")
+        raw["configs"]["obqa"]["process_docs"] = f"<function process_docs at {address}>"
+        _write(directory / "evaluation/raw/fused_lm_eval.json", raw)
+    monkeypatch.setattr(suite, "_stage", lambda *args: pytest.fail("Already completed task was rerun"))
+    result = suite.execute_task("obqa", cfg, "0,1")
+    assert result["accuracy_delta_pp"] == pytest.approx(10)
+    assert (run / "comparison.json").is_file()
+
+
+def test_real_harness_difference_does_not_trigger_futile_candidate_reevaluation(tmp_path, monkeypatch):
+    cfg, _, _ = _fixture(tmp_path, candidate=True)
+    run = Path(cfg["run"]["output_dir"])
+    raw = suite._json(run / "evaluation/raw/fused_lm_eval.json")
+    raw["versions"]["obqa"] = 2
+    _write(run / "evaluation/raw/fused_lm_eval.json", raw)
+    monkeypatch.setattr(suite, "_stage", lambda *args: pytest.fail("Real task mismatch was ignored"))
+    with pytest.raises(suite.HarnessMismatchError, match="versions.obqa"):
+        suite.execute_task("obqa", cfg, "0,1")
+
+
 def test_collect_all_eight_models_and_refuse_partial_average(tmp_path):
     for task in suite.TASKS:
         _fixture(tmp_path, task, candidate=True)
@@ -297,6 +329,44 @@ def test_invalid_later_preflight_prevents_every_training_job(tmp_path, monkeypat
     with pytest.raises(ValueError, match="budget mismatch"):
         suite.main(["run", "--root", str(tmp_path)])
     assert not calls
+
+
+@pytest.mark.parametrize("gpu_ids", ["0", "0,0", "0,1,2"])
+def test_suite_rejects_gpu_selection_other_than_two_distinct_ids(monkeypatch, gpu_ids):
+    monkeypatch.setattr(suite, "preflight", lambda *args: pytest.fail("Invalid GPU IDs reached preflight"))
+    with pytest.raises(SystemExit) as error:
+        suite.main(["run", "--gpu-ids", gpu_ids])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("visible", [1, 2])
+def test_suite_exports_two_gpu_requirement_before_preflight_and_checks_visibility(tmp_path, monkeypatch, visible):
+    cfg = suite.task_config("obqa", tmp_path)
+    saved = copy.deepcopy(cfg)
+    monkeypatch.setattr(suite, "task_config", lambda *args: cfg)
+    def check(task, config):
+        assert os.environ["CUDA_VISIBLE_DEVICES"] == "2,3"
+        assert os.environ["FEDPROXY_REQUIRED_PARALLEL_CLIENTS"] == "2"
+        return config
+    monkeypatch.setattr(suite, "preflight", check)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(device_count=lambda: visible)))
+    calls = []
+    def execute(task, config, gpu_ids):
+        assert gpu_ids == "2,3"
+        assert os.environ["FEDPROXY_GPU_IDS"] == "2,3"
+        calls.append(task)
+    monkeypatch.setattr(suite, "execute_task", execute)
+    arguments = ["run", "--task", "obqa", "--root", str(tmp_path), "--gpu-ids", "2,3"]
+    if visible == 1:
+        with pytest.raises(ValueError, match="requires 2 parallel clients"):
+            suite.main(arguments)
+        assert not (Path(cfg["run"]["output_dir"]) / "execution_config.yaml").exists()
+        assert calls == []
+    else:
+        suite.main(arguments)
+        assert calls == ["obqa"]
+        assert suite._yaml(Path(cfg["run"]["output_dir"]) / "execution_config.yaml") == saved
+    assert cfg == saved
 
 
 def test_suite_lock_blocks_another_launcher_and_releases(tmp_path):

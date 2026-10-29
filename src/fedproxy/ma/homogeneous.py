@@ -20,7 +20,8 @@ import yaml
 from fedproxy.config import load_config, save_resolved_config, validate_config
 from fedproxy.data.partition import partition_hash
 from fedproxy.evaluation.report import QA_TASKS, GLUE_TASKS, summarize
-from fedproxy.ma.report import compare, summarize_run
+from fedproxy.ma.execution import REQUIRED_PARALLEL_ENV, device_assignment, resolve_parallelism
+from fedproxy.ma.report import HarnessMismatchError, compare, summarize_run
 from fedproxy.reuse import check_reuse_compatibility, normalized_reuse_sections
 
 
@@ -75,7 +76,8 @@ def _check_contract(task: str, cfg: dict) -> None:
                  "partition_seed": 42},
         "training": {"local_epochs": 5, "micro_batch_size": 4,
                      "gradient_accumulation_steps": 4, "effective_batch_size": 16},
-        "federated": {"rounds": 10, "participation": "full"},
+        "federated": {"rounds": 10, "participation": "full",
+                      "client_execution": "parallel", "max_parallel_clients": 0},
         "evaluation": {"harness_tasks": ["openbookqa" if task == "obqa" else task], "num_fewshot": 0},
         "run": {"seed": 42},
     }
@@ -233,7 +235,7 @@ def compare_task(task: str, cfg: dict) -> dict:
         raise ValueError(f"Saved MA configuration differs from the selected experiment: {run}")
     if _differences(_shared(saved), _shared(_yaml(source / "resolved_config.train.yaml"))):
         raise ValueError(f"Baseline settings changed since training: {source}")
-    # Keep the existing strict checks for partition, compression and harness details.
+    # Check task definitions after removing only process-local function addresses.
     pair = compare(source, [run])
     if baseline["seed"] != candidate["seed"]:
         raise ValueError(f"Unmatched seeds for {task}")
@@ -329,6 +331,9 @@ def execute_task(task: str, cfg: dict, gpu_ids: str) -> dict:
     if (run / "evaluation/fused_summary.json").is_file():
         try:
             result = compare_task(task, cfg)
+        except HarnessMismatchError:
+            # Re-evaluating MA alone cannot fix genuinely different task definitions.
+            raise
         except (ValueError, FileNotFoundError, KeyError) as error:
             print(f"[ma-homogeneous] Completing/refreshing final fusion and evaluation: {error}", flush=True)
         else:
@@ -376,7 +381,15 @@ def main(argv=None) -> None:
     tasks = TASKS if args.task == "all" else (args.task,)
     if not re.fullmatch(r"[0-9]+(?:,[0-9]+)*", args.gpu_ids) or len(set(args.gpu_ids.split(","))) != len(args.gpu_ids.split(",")):
         parser.error("--gpu-ids must contain distinct comma-separated physical GPU IDs")
-    # Complete every selected preflight before allocating GPUs or writing task outputs.
+    if args.action == "run":
+        if len(args.gpu_ids.split(",")) != 2:
+            parser.error("The MA homogeneous suite requires exactly two GPU IDs, e.g. --gpu-ids 0,1")
+        # Set visibility before preflight can import any optional CUDA dependencies.
+        # This runtime constraint does not change frozen configs or checkpoint hashes.
+        os.environ.update(CUDA_VISIBLE_DEVICES=args.gpu_ids, FEDPROXY_GPU_IDS=args.gpu_ids,
+                          PYTHONUNBUFFERED="1", TOKENIZERS_PARALLELISM="false")
+        os.environ[REQUIRED_PARALLEL_ENV] = "2"
+    # Complete every selected preflight before writing task outputs.
     configs = {task: preflight(task, task_config(task, args.root, args.baseline_root)) for task in tasks}
     for task, cfg in configs.items():
         print(f"[ma-homogeneous] validated task={task} epochs=5 clients=4 output={cfg['run']['output_dir']}", flush=True)
@@ -384,8 +397,11 @@ def main(argv=None) -> None:
         return
     if any(cfg["ma"] != next(iter(configs.values()))["ma"] for cfg in configs.values()):
         raise ValueError("All selected tasks must use identical MA configurations")
-    os.environ.update(CUDA_VISIBLE_DEVICES=args.gpu_ids, FEDPROXY_GPU_IDS=args.gpu_ids,
-                      PYTHONUNBUFFERED="1", TOKENIZERS_PARALLELISM="false")
+    import torch
+
+    for cfg in configs.values():
+        resolve_parallelism(cfg["federated"], cfg["data"]["num_clients"], torch.cuda.device_count())
+    print(f"[ma-homogeneous] parallel_clients=2 {device_assignment(0)}, {device_assignment(1)}", flush=True)
     os.environ["PYTHONPATH"] = str(PROJECT / "src") + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
     with _suite_lock(args.root):
         for cfg in configs.values():
