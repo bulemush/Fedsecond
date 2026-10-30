@@ -115,8 +115,9 @@ def test_configs_match_approved_budget_and_inherit_all_ma_fields(task):
     cfg = suite.task_config(task)
     original = load_config(suite.PROJECT / "configs/experiments" / f"llama2_homogeneous_{task}_len320_mb4.yaml")
     suite._check_contract(task, cfg)
-    for section in ("data", "training", "federated", "evaluation"):
+    for section in ("data", "federated", "evaluation"):
         assert cfg[section] == original[section]
+    assert cfg["training"] == {**original["training"], "local_epochs": 10}
     assert cfg["ma"] == load_config(suite.PROJECT / "configs/ma/base.yaml")["ma"]
     assert Path(cfg["run"]["output_dir"]) == suite.DEFAULT_ROOT / suite.run_name(task)
     assert cfg["run"]["reuse_model_relocation"] is None
@@ -129,6 +130,22 @@ def test_preflight_is_read_only_and_checks_existing_baseline(tmp_path):
     assert not Path(cfg["run"]["output_dir"]).exists()
 
 
+def test_ten_epoch_ma_can_reuse_five_epoch_baseline_without_mutating_configs(tmp_path):
+    cfg, original, _ = _fixture(tmp_path)
+    assert cfg["training"]["local_epochs"] == 10
+    assert original["training"]["local_epochs"] == 5
+    assert suite.preflight("obqa", cfg) == cfg
+    assert original["training"]["local_epochs"] == 5
+
+
+def test_ma_budget_still_requires_ten_local_epochs(tmp_path):
+    cfg, _, _ = _fixture(tmp_path)
+    cfg["training"]["local_epochs"] = 5
+    with pytest.raises(ValueError, match="training.local_epochs must be 10"):
+        suite.preflight("obqa", cfg)
+    assert not Path(cfg["run"]["output_dir"]).exists()
+
+
 def test_preflight_only_requires_reusable_artifacts_not_baseline_results(tmp_path):
     cfg, _, source = _fixture(tmp_path)
     for name in ("checkpoints", "exports", "evaluation"):
@@ -138,7 +155,7 @@ def test_preflight_only_requires_reusable_artifacts_not_baseline_results(tmp_pat
 
 
 @pytest.mark.parametrize("section,key,value", [
-    ("training", "local_epochs", 10), ("training", "micro_batch_size", 2),
+    ("training", "micro_batch_size", 2),
     ("data", "max_input_length", 64), ("data", "max_train_samples_per_task", 5000),
 ])
 def test_preflight_rejects_changed_baseline_budget(tmp_path, section, key, value):
@@ -168,7 +185,7 @@ def test_preflight_rejects_other_existing_artifacts_and_changed_snapshot(tmp_pat
         suite.preflight("obqa", cfg)
     (path / "compression").rmdir()
     old = copy.deepcopy(cfg)
-    old["training"]["local_epochs"] = 10
+    old["training"]["local_epochs"] = 5
     save_resolved_config(old, path / "resolved_config.train.yaml")
     with pytest.raises(ValueError, match="Existing MA settings changed"):
         suite.preflight("obqa", cfg)
@@ -199,7 +216,7 @@ def test_result_uses_own_single_task_accuracy_and_real_downlink(tmp_path):
     assert result["task_accuracy"] == pytest.approx(0.6)
     assert result["uplink_bytes"] == 600
     assert result["downlink_bytes"] == 1100
-    assert result["local_epochs"] == 5
+    assert result["local_epochs"] == 10
 
 
 def test_stale_fusion_or_wrong_task_cannot_be_reported(tmp_path):

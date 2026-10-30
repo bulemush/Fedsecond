@@ -122,7 +122,7 @@ bash scripts/launch_homogeneous_suite.sh 0,1
 
 ## MA 数据同质性实验
 
-`configs/ma/homogeneous/` 提供与上述八个同质性 FedProxy 基线配对的 MA 配置：每任务最多 3000 条样本、4 个 IID 客户端、320-token、5 本地 epoch、10 轮、micro batch 4 × 累积 4；MA 设置完整继承当前 `configs/ma/base.yaml`。所有 MA 结果集中于 `runs/MA_homogeneous/`，每个任务独立训练、融合和评测。
+`configs/ma/homogeneous/` 提供八个同质性 MA 任务配置：每任务最多 3000 条样本、4 个 IID 客户端、320-token、每轮本地 10 epoch、10 聚合轮、micro batch 4 × 累积 4；MA 设置完整继承当前 `configs/ma/base.yaml`。所有 MA 结果默认集中于 `runs/MA_homogeneous/`，每个任务独立训练、融合和评测。已有旧版 5-epoch 产物时，应使用新的输出目录，见下方训练说明。
 
 ```bash
 PYTHONPATH=src python -m fedproxy.ma.homogeneous validate

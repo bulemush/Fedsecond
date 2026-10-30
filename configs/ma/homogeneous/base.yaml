@@ -14,7 +14,7 @@ data:
   max_input_length: 320
   max_target_length: 128
 training:
-  local_epochs: 5
+  local_epochs: 10
   effective_batch_size: 16
   micro_batch_size: 4
   gradient_accumulation_steps: 4

@@ -1,6 +1,6 @@
 # MA 单任务 IID 实验
 
-本套件使用现有 FedProxy conda 环境，不新增依赖。八个任务各自训练一个融合模型；每项最多取 3000 条训练样本，然后 IID 分到 4 个客户端。输入/目标长度为 320/128 token，本地 epoch 固定为 5，聚合 10 轮，micro batch 4、梯度累积 4，每客户端有效 batch 为 16，训练与划分种子均为 42。数据不足 3000 条时使用全部训练样本。320-token、5 epoch 设置标为 diagnostic。
+本套件使用现有 FedProxy conda 环境，不新增依赖。八个任务各自训练一个融合模型；每项最多取 3000 条训练样本，然后 IID 分到 4 个客户端。输入/目标长度为 320/128 token，每轮客户端本地 epoch 固定为 10，聚合 10 轮，micro batch 4、梯度累积 4，每客户端有效 batch 为 16，训练与划分种子均为 42。数据不足 3000 条时使用全部训练样本。由于使用 320-token 输入，结果仍标为 diagnostic。
 
 公共模板为 `configs/ma/homogeneous/base.yaml`，八项任务配置位于同一目录。整个 `ma` 节继承当前 `configs/ma/base.yaml`，包括训练/上传/锚点层数 12/10/1、80% A/B 保留率、bitmap 索引、active_conflict 下行、零/常量状态省略、时间戳残差和 MA 聚合。模板自身不单独启动。
 
@@ -12,15 +12,25 @@
 PYTHONPATH=src python -m fedproxy.ma.homogeneous validate
 ```
 
-检查成功会为八个任务分别输出 `[ma-homogeneous] validated task=... epochs=5 clients=4 ...`，进程退出码为 0。该阶段不加载模型权重或训练，不创建任务输出；发生已声明的旧模型目录迁移时会加载分词器核对词表哈希。
+检查成功会为八个任务分别输出 `[ma-homogeneous] validated task=... epochs=10 clients=4 ...`，进程退出码为 0。该阶段不加载模型权重或训练，不创建任务输出；发生已声明的旧模型目录迁移时会加载分词器核对词表哈希。
 
-每个任务的代理和数据划分默认复用 `runs/llama2_homogeneous_<task>_len320_mb4_seed42`。该目录需要有训练配置快照、`compression/` 和 `data_manifest.json`。启动检查仍会读取实际 `resolved_config.train.yaml`，核对模型、压缩、数据与原定训练预算。复用来源无需完成训练、融合或评测，套件也不读取其成绩。
+每个任务的代理和数据划分默认复用 `runs/llama2_homogeneous_<task>_len320_mb4_seed42`。该目录需要有训练配置快照、`compression/` 和 `data_manifest.json`。启动检查仍会读取实际 `resolved_config.train.yaml`，核对模型、压缩、数据及其余既定设置。本地 epoch 按 MA 当前的 10 执行，允许复用原有 5-epoch 来源的初始代理和划分。复用来源无需完成训练、融合或评测，套件也不读取其成绩。
 
 公共配置清空了异质性实验的复用来源和模型迁移声明。若基线记录的模型路径正好符合 `configs/ma/base.yaml` 已声明的旧→新迁移，套件将验证结构与分词器词表，并将迁移记录写入该任务的冻结配置。未知模型路径差异仍会报错；旧权重已删除时，结构和词表检查不等于权重逐字节相同的证明。
 
 各任务复用自己基线的 `compression/` 和 `data_manifest.json`，从相同初始 LoRA 开始新训练；不从基线最终 LoRA 或旧客户端残差继续训练。基线的任务内样本索引和客户端划分原样复用。
 
 ## 全流程后台运行
+
+若已经运行过旧版 5-epoch 的 MA 实验，使用新目录启动 10-epoch 实验，以免与旧冻结配置冲突（GPU 编号按实际空闲设备填写）：
+
+```bash
+nohup env PYTHONPATH=src python -m fedproxy.ma.homogeneous run \
+  --gpu-ids 2,3 --root runs/MA_homogeneous_ep10 \
+  > ma_homogeneous_ep10.log 2>&1 < /dev/null &
+```
+
+更换本地 epoch 后必须从初始代理重新训练，不能从旧 5-epoch 的 MA checkpoint 续训。以下默认目录命令适用于该目录尚无旧预算产物的情况。
 
 ```bash
 bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
@@ -104,13 +114,13 @@ cat runs/MA_homogeneous/results.csv
 
 旧版可能在 OBQA 已经评测完成后，因为 `harness_detail_hash mismatch` 停止。例如截图中 `configs.openbookqa.metadata.pretrained` 分别指向 FedProxy 和 MA 各自的融合模型目录。当前流程已移除这一比较阶段。
 
-将修改同步到服务器后，在原 conda 环境重新执行：
+对本地 epoch 同为 10 且冻结配置一致的实验，将修改同步到服务器后，在原 conda 环境重新执行：
 
 ```bash
 bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
 ```
 
-已有完整 MA 结果的 OBQA 会输出 `Already complete and verified: obqa`，保存 `result.json` 后进入 ARC-Easy；不需要补做 FedProxy 的评测。其余任务继续训练、融合和评估。保留原有 checkpoint、客户端状态、冻结配置和评测文件即可，本次修改兼容已有实验。
+已有同预算完整 MA 结果的 OBQA 会输出 `Already complete and verified: obqa`，保存 `result.json` 后进入 ARC-Easy；不需要补做 FedProxy 的评测。其余任务继续训练、融合和评估。保留原有 checkpoint、客户端状态、冻结配置和评测文件。旧 5-epoch 的 MA 产物不能用于当前 10-epoch 配置的跳过或续训，请按前面的新目录命令重新实验。
 
 当前入口不再生成或更新 `comparison.json`、`comparison.csv`。旧版留下的同名文件属于历史产物，查看本次结果请使用 `result.json`、`summary.json` 和 `results.csv`。
 

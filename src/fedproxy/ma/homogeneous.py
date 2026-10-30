@@ -56,8 +56,12 @@ def _differences(actual, expected, prefix="") -> list[str]:
 
 
 def _shared(cfg: dict) -> dict:
-    return {**normalized_reuse_sections(cfg), **{key: cfg[key] for key in _SHARED},
-            "run.seed": cfg["run"]["seed"]}
+    result = {**normalized_reuse_sections(cfg), **{key: cfg[key] for key in _SHARED},
+              "run.seed": cfg["run"]["seed"]}
+    # Reusing the initial proxy/partition is independent of the source run's
+    # local epochs. The MA budget is enforced separately by _check_contract.
+    result["training"] = {key: value for key, value in cfg["training"].items() if key != "local_epochs"}
+    return result
 
 
 def task_config(task: str, root: Path = DEFAULT_ROOT, baseline_root: Path | None = None) -> dict:
@@ -74,7 +78,7 @@ def _check_contract(task: str, cfg: dict) -> None:
         "data": {"scenario": "homogeneous", "tasks": [task], "num_clients": 4,
                  "max_train_samples_per_task": 3000, "max_input_length": 320, "max_target_length": 128,
                  "partition_seed": 42},
-        "training": {"local_epochs": 5, "micro_batch_size": 4,
+        "training": {"local_epochs": 10, "micro_batch_size": 4,
                      "gradient_accumulation_steps": 4, "effective_batch_size": 16},
         "federated": {"rounds": 10, "participation": "full",
                       "client_execution": "parallel", "max_parallel_clients": 0},
@@ -374,7 +378,7 @@ def main(argv=None) -> None:
     # Complete every selected preflight before writing task outputs.
     configs = {task: preflight(task, task_config(task, args.root, args.baseline_root)) for task in tasks}
     for task, cfg in configs.items():
-        print(f"[ma-homogeneous] validated task={task} epochs=5 clients=4 output={cfg['run']['output_dir']}", flush=True)
+        print(f"[ma-homogeneous] validated task={task} epochs={cfg['training']['local_epochs']} clients=4 output={cfg['run']['output_dir']}", flush=True)
     if args.action == "validate":
         return
     if any(cfg["ma"] != next(iter(configs.values()))["ma"] for cfg in configs.values()):
