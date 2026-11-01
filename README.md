@@ -122,7 +122,7 @@ bash scripts/launch_homogeneous_suite.sh 0,1
 
 ## MA 数据同质性实验
 
-`configs/ma/homogeneous/` 提供八个同质性 MA 任务配置：每任务最多 3000 条样本、4 个 IID 客户端、320-token、每轮本地 10 epoch、10 聚合轮、micro batch 4 × 累积 4；MA 设置完整继承当前 `configs/ma/base.yaml`。所有 MA 结果默认集中于 `runs/MA_homogeneous/`，每个任务独立训练、融合和评测。已有旧版 5-epoch 产物时，应使用新的输出目录，见下方训练说明。
+`configs/ma/homogeneous/` 提供八个同质性 MA 任务配置：每任务最多 3000 条样本、4 个 IID 客户端、320-token、每轮本地 5 epoch、10 聚合轮、micro batch 4 × 累积 4；MA 设置完整继承当前 `configs/ma/base.yaml`。所有 MA 结果默认集中于 `runs/MA_homogeneous/`，每个任务独立训练、融合和评测。已有 10-epoch 产物时，应使用新的输出目录，见下方训练说明。
 
 ```bash
 PYTHONPATH=src python -m fedproxy.ma.homogeneous validate
@@ -130,6 +130,8 @@ bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
 ```
 
 各任务复用原有 FedProxy 目录中的代理和数据划分，验证会核对其实际配置与预算。套件以 nohup 顺序完成 MA 的训练、融合和评估，每项评估后直接进入下一任务，支持同一命令续跑。最后生成仅含 MA 成绩的 `summary.json` 和 `results.csv`。详细目录、单任务命令和恢复规则见 [MA 同质性训练说明](docs/ma_homogeneous_training.md)。
+
+已有完整 10 轮 MA checkpoint 时，可使用 `PYTHONPATH=src python -m fedproxy.ma.extend --root runs/MA_homogeneous --rounds 20 --gpu-ids 2,3` 仅追加第 11～20 轮，并重新融合、评估。该入口沿用各任务保存的全部训练参数及客户端残差；后台命令和结果归档说明见上面的训练说明。
 
 ## 主要实现边界
 

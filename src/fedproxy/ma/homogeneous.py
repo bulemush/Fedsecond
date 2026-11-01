@@ -22,6 +22,7 @@ from fedproxy.data.partition import partition_hash
 from fedproxy.evaluation.report import QA_TASKS, GLUE_TASKS, summarize
 from fedproxy.ma.execution import REQUIRED_PARALLEL_ENV, device_assignment, resolve_parallelism
 from fedproxy.ma.report import summarize_run
+from fedproxy.ma.round_budget import target_rounds
 from fedproxy.reuse import check_reuse_compatibility, normalized_reuse_sections
 
 
@@ -78,7 +79,7 @@ def _check_contract(task: str, cfg: dict) -> None:
         "data": {"scenario": "homogeneous", "tasks": [task], "num_clients": 4,
                  "max_train_samples_per_task": 3000, "max_input_length": 320, "max_target_length": 128,
                  "partition_seed": 42},
-        "training": {"local_epochs": 10, "micro_batch_size": 4,
+        "training": {"local_epochs": 5, "micro_batch_size": 4,
                      "gradient_accumulation_steps": 4, "effective_batch_size": 16},
         "federated": {"rounds": 10, "participation": "full",
                       "client_execution": "parallel", "max_parallel_clients": 0},
@@ -109,9 +110,10 @@ def _weights_present(directory: Path) -> None:
     raise FileNotFoundError(f"Model weights or referenced shards are missing: {directory}")
 
 
-def completed_rounds(run: Path, cfg: dict, ma: bool) -> int:
+def completed_rounds(run: Path, cfg: dict, ma: bool, *, require_residual: bool = False) -> int:
     paths = sorted((run / "checkpoints").glob("round_*"))
-    if len(paths) > int(cfg["federated"]["rounds"]):
+    horizon = target_rounds(cfg) if ma else int(cfg["federated"]["rounds"])
+    if len(paths) > horizon:
         raise ValueError(f"Too many checkpoints: {run}")
     invariants = {}
     client_ids = set(_json(run / "data_manifest.json")["clients"]) if paths else set()
@@ -140,7 +142,7 @@ def completed_rounds(run: Path, cfg: dict, ma: bool) -> int:
             for key, value in invariants.items():
                 if meta.get(key) != value:
                     raise ValueError(f"Checkpoint {key} differs from the reused artifacts: {checkpoint}")
-    if ma and paths and len(paths) < int(cfg["federated"]["rounds"]):
+    if ma and paths and (require_residual or len(paths) < horizon):
         states = _json(paths[-1] / "metadata.json").get("client_states", {})
         if set(states) != client_ids or not all(
             Path(states[client]).is_file() and Path(states[client]).resolve() == (
@@ -157,7 +159,8 @@ def task_result(task: str, run: Path, ma: bool) -> dict:
         raise ValueError(f"Wrong single-task configuration: {run}")
     if cfg["run"].get("synthetic", False):
         raise ValueError(f"Synthetic run cannot be reported as an experiment result: {run}")
-    if completed_rounds(run, cfg, ma) != int(cfg["federated"]["rounds"]):
+    horizon = target_rounds(cfg) if ma else int(cfg["federated"]["rounds"])
+    if completed_rounds(run, cfg, ma) != horizon:
         raise ValueError(f"Not all configured rounds are complete: {run}")
     evaluation = _json(run / "evaluation/fused_summary.json")
     score = evaluation.get("task_accuracy")
@@ -240,15 +243,19 @@ def verified_task_result(task: str, cfg: dict) -> dict:
 def collect_suite(root: Path = DEFAULT_ROOT) -> dict:
     results = []
     ma_settings = None
+    horizons = set()
     for task in TASKS:
         cfg = _yaml(root / run_name(task) / "execution_config.yaml")
         if ma_settings is not None and cfg["ma"] != ma_settings:
             raise ValueError("Cannot combine tasks trained with different MA configurations")
         ma_settings = cfg["ma"]
+        horizons.add(target_rounds(cfg))
         results.append(verified_task_result(task, cfg))
+    if len(horizons) != 1:
+        raise ValueError("Cannot average tasks with different target round counts")
     scores = summarize({item["task"]: item["task_accuracy"] for item in results})
     return {"method": "fedproxy_ma", "scenario": "homogeneous", "model_kind": "fused",
-            "independent_models": 8, **scores, "task_results": results,
+            "independent_models": 8, "rounds": horizons.pop(), **scores, "task_results": results,
             "inference": "Single-seed descriptive results from eight independently trained MA models."}
 
 
@@ -316,6 +323,7 @@ def _freeze_config(cfg: dict) -> Path:
 def execute_task(task: str, cfg: dict, gpu_ids: str) -> dict:
     run = Path(cfg["run"]["output_dir"])
     frozen = _freeze_config(cfg)
+    horizon = target_rounds(cfg)
     if (run / "evaluation/fused_summary.json").is_file():
         try:
             result = verified_task_result(task, cfg)
@@ -327,10 +335,10 @@ def execute_task(task: str, cfg: dict, gpu_ids: str) -> dict:
             return result
     _stage("reuse-audit", frozen, gpu_ids)
     finished = completed_rounds(run, cfg, ma=True)
-    if finished < int(cfg["federated"]["rounds"]):
+    if finished < horizon:
         _stage("dry-run", frozen, gpu_ids)
         _stage("resume" if finished else "train", frozen, gpu_ids)
-    final = run / "checkpoints" / f"round_{int(cfg['federated']['rounds']):04d}"
+    final = run / "checkpoints" / f"round_{horizon:04d}"
     fusion_path = run / "exports/llm_fused/fusion_manifest.json"
     valid_fusion = False
     if fusion_path.is_file():

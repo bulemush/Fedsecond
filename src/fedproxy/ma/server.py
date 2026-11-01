@@ -22,6 +22,7 @@ from .client import run_client_job
 from .codec import decode_packet
 from .downlink import encode_downlink
 from .execution import client_waves, device_assignment, resolve_parallelism
+from .round_budget import target_rounds
 from .scheduler import audit_residual_delivery, plan_round
 from .schema import BlockRegistry
 
@@ -81,7 +82,7 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
             (run_dir / "compression" / "compression_manifest.json").read_bytes()
         ).hexdigest(),
     }
-    rounds = int(cfg["federated"]["rounds"])
+    rounds = target_rounds(cfg)
     schedule_audit = audit_residual_delivery(registry, client_ids, rounds, cfg)
     if dry_run:
         preview = plan_round(registry, client_ids, 0, cfg)
@@ -118,6 +119,9 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
     for round_id in range(start, rounds):
         started = time.perf_counter()
         round_cfg = _round_config(cfg, previous_meta)
+        # The horizon is runtime metadata; keep checkpoint/packet config_hash
+        # tied to the immutable original config, including for staged replay.
+        round_cfg["federated"]["rounds"] = rounds
         plans = plan_round(registry, client_ids, round_id, round_cfg)
         if round_cfg["ma"]["aggregation"]["q0"] == "auto_anchor_numel":
             anchor = plans[client_ids[0]].anchor_blocks

@@ -1,5 +1,6 @@
 """Exercise the real server, worker, packets and checkpoints with a cheap trainer."""
 import json
+import copy
 
 import pytest
 import torch
@@ -8,6 +9,7 @@ from fedproxy.config import load_config
 from fedproxy.federated.state import ClientResult
 from fedproxy.ma import client, server
 from fedproxy.utils.checkpoint import load_checkpoint
+from fedproxy.ma.extend import register_extension
 
 
 @pytest.mark.parametrize("optimized", [False, True])
@@ -90,3 +92,64 @@ def test_transport_accounting_and_partial_round_resume(tmp_path, monkeypatch, op
             assert "downlink" not in comm
     checkpoint = load_checkpoint(result["last_checkpoint"])
     assert set(checkpoint["adapter"]) == set(initial)
+
+
+def test_ten_plus_ten_extension_matches_uninterrupted_twenty_rounds(tmp_path, monkeypatch):
+    from fedproxy import workflows
+
+    template = load_config("configs/ma/base.yaml")
+    template["run"]["reuse_artifacts_from"] = None
+    template["data"]["truncation_audit"] = False
+    template["federated"].update(client_execution="sequential", max_parallel_clients=1)
+    template["ma"]["schedule"].update(train_blocks=2, upload_blocks=1, anchor_blocks=1, q_block=0)
+    initial = {f"model.layers.{block}.q_proj.lora_A.weight": torch.arange(32).float()
+               for block in range(3)}
+    monkeypatch.setattr(workflows, "_load_train_model", lambda *args: object())
+    monkeypatch.setattr(server, "export_adapter", lambda _: {k: v.clone() for k, v in initial.items()})
+    monkeypatch.setattr(client, "load_tokenizer", lambda _: object())
+    monkeypatch.setattr(workflows, "_load_client_examples", lambda *args: [])
+    monkeypatch.setattr(workflows, "_make_client_loader", lambda *args, **kwargs: object())
+    calls = []
+
+    def fake_train(client_id, factory, base, conflict, loader, config, **kwargs):
+        calls.append((kwargs["round_id"], client_id))
+        local = {name: value.clone() for name, value in base.items()}
+        for name in kwargs["active_names"]:
+            local[name][::2] += 0.125 + 0.01 * kwargs["round_id"]
+        return ClientResult(client_id, local, 2, {"task_loss": 0.5, "elapsed_seconds": 0.0})
+
+    monkeypatch.setattr(client, "train_client", fake_train)
+
+    def config(name, rounds):
+        cfg = copy.deepcopy(template)
+        root = tmp_path / name
+        cfg["run"]["output_dir"] = str(root)
+        cfg["federated"]["rounds"] = rounds
+        (root / "compression/proxy").mkdir(parents=True)
+        (root / "compression/compression_manifest.json").write_text("{}")
+        (root / "data_manifest.json").write_text(json.dumps({"clients": ["a", "b"], "partition_hash": "same"}))
+        return cfg, root
+
+    reference_cfg, _ = config("reference", 20)
+    reference = load_checkpoint(server.train_ma(reference_cfg)["last_checkpoint"])
+    cfg, root = config("continued", 10)
+    first = server.train_ma(cfg)
+    old_metadata = (root / "checkpoints/round_0010/metadata.json").read_bytes()
+    register_extension(cfg, 20)
+    calls.clear()
+    result = server.train_ma(cfg, resume=first["last_checkpoint"])
+    continued = load_checkpoint(result["last_checkpoint"])
+    assert result["new_rounds"] == 10 and result["completed_rounds"] == 20
+    assert calls == [(number, client_id) for number in range(10, 20) for client_id in ("a", "b")]
+    assert (root / "checkpoints/round_0010/metadata.json").read_bytes() == old_metadata
+    for kind in ("adapter", "conflict"):
+        for name in initial:
+            torch.testing.assert_close(continued[kind][name], reference[kind][name], rtol=0, atol=0)
+    for client_id in ("a", "b"):
+        left = torch.load(continued["metadata"]["client_states"][client_id], weights_only=True)
+        right = torch.load(reference["metadata"]["client_states"][client_id], weights_only=True)
+        assert left.keys() == right.keys()
+        for source, tensors in left.items():
+            assert tensors.keys() == right[source].keys()
+            for name, tensor in tensors.items():
+                torch.testing.assert_close(tensor, right[source][name], rtol=0, atol=0)

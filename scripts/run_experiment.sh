@@ -28,10 +28,11 @@ readarray -t RESOLVED < <(
   python - "$CONFIG" <<'PY'
 import sys
 from fedproxy.config import load_config
+from fedproxy.ma.round_budget import target_rounds
 
 cfg = load_config(sys.argv[1])
 print(cfg["run"]["output_dir"])
-print(cfg["federated"]["rounds"])
+print(target_rounds(cfg) if cfg.get("ma", {}).get("enabled") else cfg["federated"]["rounds"])
 PY
 )
 

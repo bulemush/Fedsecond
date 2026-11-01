@@ -1,6 +1,6 @@
 # MA 单任务 IID 实验
 
-本套件使用现有 FedProxy conda 环境，不新增依赖。八个任务各自训练一个融合模型；每项最多取 3000 条训练样本，然后 IID 分到 4 个客户端。输入/目标长度为 320/128 token，每轮客户端本地 epoch 固定为 10，聚合 10 轮，micro batch 4、梯度累积 4，每客户端有效 batch 为 16，训练与划分种子均为 42。数据不足 3000 条时使用全部训练样本。由于使用 320-token 输入，结果仍标为 diagnostic。
+本套件使用现有 FedProxy conda 环境，不新增依赖。八个任务各自训练一个融合模型；每项最多取 3000 条训练样本，然后 IID 分到 4 个客户端。输入/目标长度为 320/128 token，每轮客户端本地 epoch 固定为 5，聚合 10 轮，micro batch 4、梯度累积 4，每客户端有效 batch 为 16，训练与划分种子均为 42。数据不足 3000 条时使用全部训练样本。320-token 输入与 5 个本地 epoch 均偏离论文附录设置，结果仍标为 diagnostic。
 
 公共模板为 `configs/ma/homogeneous/base.yaml`，八项任务配置位于同一目录。整个 `ma` 节继承当前 `configs/ma/base.yaml`，包括训练/上传/锚点层数 12/10/1、80% A/B 保留率、bitmap 索引、active_conflict 下行、零/常量状态省略、时间戳残差和 MA 聚合。模板自身不单独启动。
 
@@ -12,9 +12,9 @@
 PYTHONPATH=src python -m fedproxy.ma.homogeneous validate
 ```
 
-检查成功会为八个任务分别输出 `[ma-homogeneous] validated task=... epochs=10 clients=4 ...`，进程退出码为 0。该阶段不加载模型权重或训练，不创建任务输出；发生已声明的旧模型目录迁移时会加载分词器核对词表哈希。
+检查成功会为八个任务分别输出 `[ma-homogeneous] validated task=... epochs=5 clients=4 ...`，进程退出码为 0。该阶段不加载模型权重或训练，不创建任务输出；发生已声明的旧模型目录迁移时会加载分词器核对词表哈希。
 
-每个任务的代理和数据划分默认复用 `runs/llama2_homogeneous_<task>_len320_mb4_seed42`。该目录需要有训练配置快照、`compression/` 和 `data_manifest.json`。启动检查仍会读取实际 `resolved_config.train.yaml`，核对模型、压缩、数据及其余既定设置。本地 epoch 按 MA 当前的 10 执行，允许复用原有 5-epoch 来源的初始代理和划分。复用来源无需完成训练、融合或评测，套件也不读取其成绩。
+每个任务的代理和数据划分默认复用 `runs/llama2_homogeneous_<task>_len320_mb4_seed42`。该目录需要有训练配置快照、`compression/` 和 `data_manifest.json`。启动检查仍会读取实际 `resolved_config.train.yaml`，核对模型、压缩、数据及其余既定设置。本地 epoch 按 MA 当前的 5 执行，复用初始代理和划分不受来源训练 epoch 的影响。复用来源无需完成训练、融合或评测，套件也不读取其成绩。
 
 公共配置清空了异质性实验的复用来源和模型迁移声明。若基线记录的模型路径正好符合 `configs/ma/base.yaml` 已声明的旧→新迁移，套件将验证结构与分词器词表，并将迁移记录写入该任务的冻结配置。未知模型路径差异仍会报错；旧权重已删除时，结构和词表检查不等于权重逐字节相同的证明。
 
@@ -22,15 +22,15 @@ PYTHONPATH=src python -m fedproxy.ma.homogeneous validate
 
 ## 全流程后台运行
 
-若已经运行过旧版 5-epoch 的 MA 实验，使用新目录启动 10-epoch 实验，以免与旧冻结配置冲突（GPU 编号按实际空闲设备填写）：
+若已经运行过 10-epoch 的 MA 实验，使用新目录启动 5-epoch 实验，以免与旧冻结配置冲突（GPU 编号按实际空闲设备填写）：
 
 ```bash
 nohup env PYTHONPATH=src python -m fedproxy.ma.homogeneous run \
-  --gpu-ids 2,3 --root runs/MA_homogeneous_ep10 \
-  > ma_homogeneous_ep10.log 2>&1 < /dev/null &
+  --gpu-ids 2,3 --root runs/MA_homogeneous_ep5 \
+  > ma_homogeneous_ep5.log 2>&1 < /dev/null &
 ```
 
-更换本地 epoch 后必须从初始代理重新训练，不能从旧 5-epoch 的 MA checkpoint 续训。以下默认目录命令适用于该目录尚无旧预算产物的情况。
+更换本地 epoch 后必须从初始代理重新训练，不能从 10-epoch 的 MA checkpoint 续训。以下默认目录命令适用于该目录尚无其他预算产物，或已有相同 5-epoch 冻结配置的情况。
 
 ```bash
 bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
@@ -89,6 +89,43 @@ bash scripts/launch_ma_homogeneous_suite.sh 0,1 arc_challenge
 
 恢复需要保留任务目录中的 `clients/` 残差状态、checkpoint、符号链接及 `execution_config.yaml`。已启动的任务冻结配置不能修改；更改配置后需要新的输出目录。仅停止日志查看不等于终止训练。
 
+## 从已完成的 10 轮继续到 20 轮
+
+使用专门的续训入口，只追加第 11～20 轮。它读取每个任务已保存的 `execution_config.yaml` 和 `resolved_config.train.yaml`，沿用真实训练配置：本地 epoch、batch、种子、数据划分和 MA 参数均不改变。即使当前 YAML 的本地 epoch 与旧实验不同，续训也以旧实验保存的值为准。两张卡仍各运行一个客户端。
+
+先在服务器原 conda 环境检查八个任务（`--root` 填实际完成 10 轮的总目录；若是 `runs/MA_homogeneous_ep5`，对应替换）：
+
+```bash
+PYTHONPATH=src python -m fedproxy.ma.extend \
+  --root runs/MA_homogeneous --rounds 20 --gpu-ids 2,3 --validate-only
+```
+
+检查通过后，后台顺序续训、融合并评估八个任务：
+
+```bash
+nohup env PYTHONPATH=src python -u -m fedproxy.ma.extend \
+  --root runs/MA_homogeneous --rounds 20 --gpu-ids 2,3 \
+  > ma_homogeneous_round20.log 2>&1 < /dev/null &
+tail -f ma_homogeneous_round20.log
+```
+
+`--rounds 20` 表示总共 20 轮，即追加 10 轮。日志应从 `round=11/20` 开始。每项完成后重新融合第 20 轮模型、评估并进入下一任务；不比较 FedProxy。中断后重复同一条 nohup 命令，会从最近完成轮次继续，已验证完成 20 轮的任务会跳过。Ctrl+C 只停止上述日志查看。
+
+续训要求原预算的各轮 checkpoint 完整，并且第 10 轮 `client_states` 指向的四个 `clients/<客户端>/round_0010/residual.pt` 均存在；继续的状态包括全局 LoRA、冲突状态、各客户端残差以及聚合历史。原实现每个客户端每轮重新创建优化器，所以无需额外恢复 AdamW 状态。缺少这些残差时不能把它当作同一 MA 实验无损续训，应先恢复相应文件。
+
+不要直接编辑冻结配置中的 `federated.rounds`，也不要对旧 MA checkpoint 使用 `--rounds 20` 覆盖训练配置；那样会改变配置哈希。专用入口用绑定原配置哈希的 `round_extension.json` 记录新目标，保留原配置和前 10 轮 checkpoint，因此历史上传包及残差仍然有效。冻结 YAML 中的轮数仍是原始 10，当前目标看 `round_extension.json`，完成后的报告 `rounds` 为 20。原始总轮数不参与学习率或 MA 调度的退火，调度使用连续轮次，因此在其余条件相同时，这种继续方式保持相同的逐轮训练规则。
+
+每个任务的第 10 轮评测、原始 lm-eval JSON、融合清单和已有 `result.json` 会归档到该任务的 `round_results/round_0010/`。全套已有的第 10 轮汇总保存在总目录的 `round_results/round_0010/`。只归档小型结果文件，不复制整套 LLM 权重；第 10 轮 checkpoint 保留，需要时仍可重新融合。
+
+全部完成后查看第 20 轮结果：
+
+```bash
+python scripts/summarize_ma_homogeneous_suite.py --root runs/MA_homogeneous
+cat runs/MA_homogeneous/results.csv
+```
+
+汇总的 `rounds` 应为 20，包含八项 accuracy 和 QA/GLUE/ALL 平均。训练期间旧汇总可能仍显示第 10 轮结果，以全套完成后的汇总为准。只续训单项可在续训命令后添加 `--task arc_challenge`；不同总轮数的任务不会合并计算平均值。
+
 ## 查看结果
 
 单任务评测：
@@ -114,13 +151,13 @@ cat runs/MA_homogeneous/results.csv
 
 旧版可能在 OBQA 已经评测完成后，因为 `harness_detail_hash mismatch` 停止。例如截图中 `configs.openbookqa.metadata.pretrained` 分别指向 FedProxy 和 MA 各自的融合模型目录。当前流程已移除这一比较阶段。
 
-对本地 epoch 同为 10 且冻结配置一致的实验，将修改同步到服务器后，在原 conda 环境重新执行：
+对本地 epoch 同为 5 且冻结配置一致的实验，将修改同步到服务器后，在原 conda 环境重新执行：
 
 ```bash
 bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
 ```
 
-已有同预算完整 MA 结果的 OBQA 会输出 `Already complete and verified: obqa`，保存 `result.json` 后进入 ARC-Easy；不需要补做 FedProxy 的评测。其余任务继续训练、融合和评估。保留原有 checkpoint、客户端状态、冻结配置和评测文件。旧 5-epoch 的 MA 产物不能用于当前 10-epoch 配置的跳过或续训，请按前面的新目录命令重新实验。
+已有同预算完整 MA 结果的 OBQA 会输出 `Already complete and verified: obqa`，保存 `result.json` 后进入 ARC-Easy；不需要补做 FedProxy 的评测。其余任务继续训练、融合和评估。保留原有 checkpoint、客户端状态、冻结配置和评测文件。不同本地 epoch 的产物不能混用；只延长全局轮数可使用上面的专用续训入口。
 
 当前入口不再生成或更新 `comparison.json`、`comparison.csv`。旧版留下的同名文件属于历史产物，查看本次结果请使用 `result.json`、`summary.json` 和 `results.csv`。
 
@@ -129,13 +166,13 @@ MA 通信以实际编码包长度计数；成本统计排除初始化模型分�
 ## 验证代码
 
 ```bash
-PYTHONPATH=src pytest -q tests/test_ma_homogeneous.py tests/test_ma_execution.py tests/test_ma_config.py tests/test_reuse.py tests/test_reuse_script.py tests/test_ma_report.py tests/test_homogeneous_report.py
+PYTHONPATH=src pytest -q tests/test_ma_homogeneous.py tests/test_ma_round_extension.py tests/test_ma_execution.py tests/test_ma_config.py tests/test_reuse.py tests/test_reuse_script.py tests/test_ma_report.py tests/test_homogeneous_report.py
 ```
 
 服务器原环境中可补充运行现有 tiny 集成和协议测试：
 
 ```bash
-PYTHONPATH=src pytest -q tests/test_ma_protocol.py tests/test_ma_tiny_integration.py
+PYTHONPATH=src pytest -q tests/test_ma_protocol.py tests/test_ma_tiny_integration.py tests/test_ma_transport_resume.py
 ```
 
 本地若未安装 PyTorch/Transformers，前一组仍可验证套件配置、预算拦截、续跑调度、结果身份与汇总；tiny 训练与真实 7B 实验需要在服务器环境验证。
