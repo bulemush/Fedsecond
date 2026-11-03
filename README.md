@@ -133,6 +133,19 @@ bash scripts/launch_ma_homogeneous_suite.sh 0,1 all
 
 已有完整 10 轮 MA checkpoint 时，可使用 `PYTHONPATH=src python -m fedproxy.ma.extend --root runs/MA_homogeneous --rounds 20 --gpu-ids 2,3` 仅追加第 11～20 轮，并重新融合、评估。该入口沿用各任务保存的全部训练参数及客户端残差；后台命令和结果归档说明见上面的训练说明。
 
+## Ratio30 双方法同质性实验
+
+Ratio30 的双方法同质性实验使用 MA 方案 B（23 层代理，训练／上传／锚点 17/14/1，`q_block=2`）。两个方法均为每任务最多 3000 条、320-token、5 本地 epoch、10 轮、micro batch 4 × 累积 4。先执行 `PYTHONPATH=src python -m fedproxy.ratio30 validate`，再运行 `bash scripts/launch_ratio30_homogeneous_suite.sh 2,3 both all`。配置、共享输入、恢复及独立汇总说明见 [Ratio30 同质性训练说明](docs/ratio30_homogeneous_training.md)。
+
+Ratio30 的异质性实验使用八客户端各持一个任务、每方法一个全局模型，训练预算与上述配置相同。检查后可全流程 nohup 运行：
+
+```bash
+PYTHONPATH=src python -m fedproxy.ratio30_heterogeneous validate --gpu-ids 2,3
+bash scripts/launch_ratio30_heterogeneous_suite.sh 2,3 both
+```
+
+结果集中在 `runs/heterogeneous_ratio30/`，支持独立运行方法、同一命令恢复和八任务结果读取，见 [Ratio30 异质性训练说明](docs/ratio30_heterogeneous_training.md)。
+
 ## 主要实现边界
 
 - 压缩只有论文明确给出的 BI 结构化剪枝，没有臆造 KL 蒸馏。

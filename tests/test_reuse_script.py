@@ -26,7 +26,7 @@ def bash():
     pytest.skip("Bash is unavailable")
 
 
-def _bash(bash, code, *arguments):
+def _bash(bash, code, *arguments, cwd=PROJECT):
     # MSYS system symlinks let Git Bash test chained links without Windows
     # administrator privileges. Linux uses normal native symlinks.
     env = dict(os.environ, TEST_PYTHON=Path(sys.executable).as_posix(),
@@ -36,7 +36,7 @@ def _bash(bash, code, *arguments):
         env["MSYS2_ENV_CONV_EXCL"] = "PYTHONPATH"
         env["TEST_STRIP_CR"] = "1"
     return subprocess.run([bash, "-c", code, "reuse-test", *map(str, arguments)],
-                          env=env, cwd=PROJECT, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                          env=env, cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=30)
 
 
 def _fixture(tmp_path, bash, destination):
@@ -78,7 +78,7 @@ def _fixture(tmp_path, bash, destination):
     return config, run
 
 
-def _reuse(bash, config, stage):
+def _reuse(bash, config, stage, cwd=PROJECT):
     # Config reads and fedproxy.reuse run normally. Only GPU CLI stages are
     # stubbed, so these tests never import torch or execute real training.
     code = '''
@@ -96,7 +96,7 @@ python() {
 export -f python
 bash "$1" "$2" 2,3 "$3"
 '''
-    return _bash(bash, code, (PROJECT / "scripts/run_experiment.sh").as_posix(), config.as_posix(), stage)
+    return _bash(bash, code, (PROJECT / "scripts/run_experiment.sh").as_posix(), config.as_posix(), stage, cwd=cwd)
 
 
 @pytest.mark.parametrize("stage", ["reuse-audit", "reuse-compression-all"])
@@ -107,7 +107,32 @@ def test_reuse_accepts_chained_source_and_is_repeatable(tmp_path, bash, stage, d
         result = _reuse(bash, config, stage)
         assert result.returncode == 0, result.stdout + result.stderr
         assert "stub_cli=audit-truncation" in result.stdout
+    links = [run / "compression"]
+    if stage == "reuse-audit":
+        links.append(run / "data_manifest.json")
+    for link in links:
+        result = _bash(bash, 'readlink -- "$1"', link.as_posix())
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip().startswith(".."), result.stdout
     assert (run / "checkpoints/keep.txt").read_text(encoding="utf-8") == "existing checkpoint marker"
+
+
+def test_reuse_resolves_runtime_paths_from_project_when_called_elsewhere(tmp_path, bash):
+    config, _ = _fixture(tmp_path, bash, "missing")
+    cfg = load_config(config)
+    source = tmp_path / "baseline_arc_easy"
+    # This relative data path exists from the project root, but not from tmp_path.
+    # Canonical reuse comparison must still accept the baseline absolute spelling.
+    cfg["data"]["local_dir"] = "./configs"
+    save_resolved_config(cfg, config)
+    for command in ("train", "compress"):
+        snapshot = source / f"resolved_config.{command}.yaml"
+        original = load_config(snapshot)
+        original["data"]["local_dir"] = (PROJECT / "configs").as_posix()
+        save_resolved_config(original, snapshot)
+    result = _reuse(bash, config, "reuse-audit", cwd=tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "stub_cli=audit-truncation" in result.stdout
 
 
 @pytest.mark.parametrize("stage", ["reuse-audit", "reuse-compression-all"])

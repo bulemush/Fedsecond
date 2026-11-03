@@ -23,9 +23,35 @@ MA 路径沿用现有 fedproxy-repro 安装与依赖，不需要更换服务器�
 
 ## 复用相同的基线代理与数据划分
 
-configs/ma/base.yaml 默认复用 runs/llama2_full_len320_mb4_seed42 的已有压缩代理和数据划分。该基线 `resolved_config.train.yaml` 记录的旧模型目录已被删除，当前模型与分词器均从 `/home/async/data-disk/wjf/wgh/Fedsecond/data/models` 加载。`run.reuse_model_relocation` 明确记录旧目录和新目录，供复用检查及结果报告识别；检查会核对新目录的模型层数、主要结构字段和分词器词表哈希是否与基线压缩清单一致，不加载 7B 权重。由于旧权重已删除，无法逐字节证明新下载的权重与基线完全相同；跨这两次下载的严格权重同一性仍依赖原模型修订版本的外部记录。所有 MA 变体都继承每任务 3000 条样本的设置。若基线不存在，先建立与 MA 设置一致的基线；仓库现有 `configs/experiments/llama2_full_len320_mb4.yaml` 默认为 5000 条/任务，不能直接用它产生可比较的 3000 条基线。
+configs/ma/base.yaml 默认复用 runs/llama2_full_len320_mb4_seed42 的已有压缩代理和数据划分。该基线 `resolved_config.train.yaml` 记录的旧模型目录已被删除，当前模型与分词器均从项目根目录下的 `./data/models` 加载。`run.reuse_model_relocation` 明确记录旧目录和新目录，供复用检查及结果报告识别；检查会核对新目录的模型层数、主要结构字段和分词器词表哈希是否与基线压缩清单一致，不加载 7B 权重。由于旧权重已删除，无法逐字节证明新下载的权重与基线完全相同；跨这两次下载的严格权重同一性仍依赖原模型修订版本的外部记录。所有 MA 变体都继承每任务 3000 条样本的设置。若基线不存在，先建立与 MA 设置一致的基线；仓库现有 `configs/experiments/llama2_full_len320_mb4.yaml` 默认为 5000 条/任务，不能直接用它产生可比较的 3000 条基线。
 
-    test -r /home/async/data-disk/wjf/wgh/Fedsecond/data/models/config.json && echo "当前模型目录可读取"
+    test -r ./data/models/config.json && echo "当前模型目录可读取"
+
+### base 配置的训练轮数与项目迁移
+
+`bash scripts/launch_experiment.sh configs/ma/base.yaml 0,1 reuse-all` 的最终配置结果是 `training.local_epochs: 5`、`federated.rounds: 10`。即每个客户端每轮进行 5 个本地 epoch，全参与训练 10 个全局通信轮次，每个客户端累计 50 个本地 epoch。两张 GPU 并行运行不同客户端，不会将训练轮数翻倍。继承 base 且未覆盖本地轮数的 MA 变体也使用 5；balanced.yaml 仍显式设为 10。与使用 10 个本地 epoch 的历史基线相比，训练预算已不同。若运行目录中另有合法的 `round_extension.json`，全局轮数使用其中明确延长后的目标值。
+
+移动项目时，应保持下列目录关系（`data/models` 内直接放 `config.json`、分词器文件和模型权重）：
+
+```text
+项目根目录/
+├── configs/
+├── scripts/
+├── src/
+├── data/models/config.json
+├── data/models/模型权重与分词器文件
+└── runs/llama2_full_len320_mb4_seed42/
+    ├── compression/proxy/
+    ├── compression/compression_manifest.json
+    ├── data_manifest.json
+    └── resolved_config.train.yaml
+```
+
+`data/` 与 `runs/` 被 Git 忽略，移动或重新克隆代码时须另行带上真实模型、数据和基线产物；只复制代码不能运行 `reuse-all`。当前模型路径和 `run.reuse_model_relocation.current` 都是 `./data/models`；`original` 中的旧绝对路径是基线身份记录，须保留原值，程序不会从它加载模型。直接运行 Python 命令时先进入项目根目录；两个 experiment 启动脚本会自动切换到项目根目录。
+
+复用脚本现在创建相对符号链接，并在确认已有链接目标正确后将其转为相对链接。可在迁移前执行 `bash scripts/run_experiment.sh configs/ma/base.yaml 0,1 reuse-audit` 完成检查和转换。基线自身如果也使用符号链接，须一并带上链接最终指向的产物；其旧绝对链接也须在迁移时修正。迁移后若 MA 运行目录中的 `compression` 或 `data_manifest.json` 是指向旧位置的失效链接，仅移除该链接再执行 `reuse-all`，不要删除真实压缩目录或基线产物。
+
+如需从第一轮重新训练，先将 `run.name` 和 `run.output_dir` 改为新的实验名与目录，再执行原命令。已有 checkpoint 的输出目录会拒绝重新 `train`。修改模型路径也会改变配置哈希，因此旧 checkpoint 不能直接使用这份新配置恢复；不要改写历史快照或 checkpoint 元数据来绕过检查。
 
 开始后台任务前，先在项目根目录运行一次无需加载 7B 模型的复用配置检查：
 

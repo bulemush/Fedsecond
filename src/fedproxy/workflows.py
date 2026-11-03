@@ -450,6 +450,8 @@ def train(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dict:
         f"[train] status=initializing_global_adapter device={initialization_device}",
         flush=True,
     )
+    if cfg["run"].get("adapter_initialization_seed") is not None:
+        seed_everything(int(cfg["run"]["adapter_initialization_seed"]))
     initialized = _load_train_model(proxy_path, cfg, initialization_device)
     initial_adapter = export_adapter(initialized)
     del initialized

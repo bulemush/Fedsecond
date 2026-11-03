@@ -68,7 +68,7 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
     print(f"[ma] execution={execution} visible_gpus={visible} parallel_clients={parallelism} devices={mapping}", flush=True)
     if cfg["data"].get("truncation_audit", True):
         audit_training_prompts(cfg, manifest, tokenizer_path=proxy_path if resume else None)
-    seed_everything(int(cfg["run"]["seed"]))
+    seed_everything(int(cfg["run"].get("adapter_initialization_seed", cfg["run"]["seed"])))
     initial_model = _load_train_model(proxy_path, cfg, torch.device("cpu"))
     initial = export_adapter(initial_model)
     del initial_model

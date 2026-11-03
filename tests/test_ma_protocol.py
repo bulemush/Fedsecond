@@ -39,13 +39,15 @@ def test_scheduler_keeps_anchor_inside_upload_inside_train():
         assert plan.anchor_blocks <= plan.upload_blocks <= plan.train_blocks
 
 
-@pytest.mark.parametrize("num_clients,train_budget,upload_budget", [(8, 12, 10), (8, 8, 5), (4, 12, 10)])
+@pytest.mark.parametrize("num_clients,proxy_blocks,train_budget,upload_budget", [
+    (8, 16, 12, 10), (8, 16, 8, 5), (4, 16, 12, 10), (4, 23, 17, 14), (8, 23, 17, 14),
+])
 def test_scheduler_revisits_each_clients_trained_layers_before_residual_ttl(
-    num_clients, train_budget, upload_budget,
+    num_clients, proxy_blocks, train_budget, upload_budget,
 ):
     # These are the Conservative and Balanced budgets on a 16-block proxy.
     state = {f"model.layers.{block}.q_proj.lora_A.weight": torch.zeros(1)
-             for block in range(16)}
+             for block in range(proxy_blocks)}
     registry = BlockRegistry.from_spec(ParameterSpec.from_state(state))
     cfg = _config()
     cfg["ma"]["schedule"].update({"train_blocks": train_budget,

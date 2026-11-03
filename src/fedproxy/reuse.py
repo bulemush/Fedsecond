@@ -104,8 +104,8 @@ def _check_declared_model_relocation(target: dict, original: dict, source_run: P
     if not isinstance(relocation, dict):
         raise ValueError("run.reuse_model_relocation must contain original and current paths")
     previous, current = relocation.get("original"), relocation.get("current")
-    if not all(isinstance(value, str) and Path(value).is_absolute() for value in (previous, current)):
-        raise ValueError("run.reuse_model_relocation requires absolute original and current paths")
+    if not all(isinstance(value, str) and value.strip() for value in (previous, current)):
+        raise ValueError("run.reuse_model_relocation requires non-empty original and current paths")
     if previous == current:
         raise ValueError("run.reuse_model_relocation paths must differ")
     for cfg, expected, label in ((target, current, "MA"), (original, previous, "baseline")):
@@ -115,7 +115,8 @@ def _check_declared_model_relocation(target: dict, original: dict, source_run: P
         ) != expected:
             raise ValueError(f"{label} model and tokenizer paths do not match the declared relocation")
 
-    model_dir = Path(current)
+    # Relative paths use the project working directory, just like model loading.
+    model_dir = Path(current).expanduser()
     config_path = model_dir / "config.json"
     if not config_path.is_file():
         raise FileNotFoundError(f"Relocated model lacks config.json: {config_path}")
@@ -146,13 +147,14 @@ def check_reuse_compatibility(target: dict, source_run: str | Path) -> Path:
         (path for path in (
             source_run / "resolved_config.train.yaml",
             source_run / "resolved_config.compress.yaml",
+            source_run / "resolved_config.prepare-data.yaml",
         ) if path.is_file()),
         None,
     )
     if source_config is None:
         raise FileNotFoundError(
             f"Reused proxy source lacks resolved_config.train.yaml or "
-            f"resolved_config.compress.yaml: {source_run}"
+            f"resolved_config.compress.yaml or resolved_config.prepare-data.yaml: {source_run}"
         )
     original = yaml.safe_load(source_config.read_text(encoding="utf-8"))
     if not isinstance(original, dict):

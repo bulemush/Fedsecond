@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from fedproxy.federated.state import ParameterSpec
+if TYPE_CHECKING:
+    from fedproxy.federated.state import ParameterSpec
 
 
 _BLOCK = re.compile(r"(?:^|\.)layers\.(\d+)\.")

@@ -95,21 +95,28 @@ def test_reuse_reads_compression_snapshot_when_train_snapshot_is_absent(tmp_path
     assert check_reuse_compatibility(target, tmp_path) == snapshot
 
 
-def test_reuse_accepts_declared_model_relocation_after_metadata_checks(tmp_path, monkeypatch):
+@pytest.mark.parametrize("relative_current", [False, True])
+def test_reuse_accepts_declared_model_relocation_after_metadata_checks(
+    tmp_path, monkeypatch, relative_current,
+):
     target, source = _configs()
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
     previous = str(tmp_path / "deleted_model")
-    current = tmp_path / "new_model"
+    current = project / "new_model"
     current.mkdir()
     (current / "config.json").write_text(json.dumps({
         "model_type": "llama", "num_hidden_layers": 32, "hidden_size": 4096,
     }), encoding="utf-8")
-    target["model"]["name_or_path"] = str(current)
-    target["model"]["tokenizer_name_or_path"] = str(current)
+    current_path = "./new_model" if relative_current else str(current)
+    target["model"]["name_or_path"] = current_path
+    target["model"]["tokenizer_name_or_path"] = current_path
     target["run"]["reuse_model_relocation"]["original"] = previous
-    target["run"]["reuse_model_relocation"]["current"] = str(current)
+    target["run"]["reuse_model_relocation"]["current"] = current_path
     source["model"]["name_or_path"] = previous
     source["model"]["tokenizer_name_or_path"] = previous
-    source_run = tmp_path / "baseline"
+    source_run = project / "baseline"
     proxy = source_run / "compression" / "proxy"
     proxy.mkdir(parents=True)
     (proxy / "config.json").write_text(json.dumps({
@@ -123,6 +130,16 @@ def test_reuse_accepts_declared_model_relocation_after_metadata_checks(tmp_path,
     save_resolved_config(source, snapshot)
     monkeypatch.setattr("fedproxy.reuse._tokenizer_vocab_sha256", lambda _: "matching-vocab")
     assert check_reuse_compatibility(target, source_run) == snapshot
+
+    if relative_current:
+        moved = tmp_path / "moved_project"
+        monkeypatch.chdir(tmp_path)
+        project.rename(moved)
+        monkeypatch.chdir(moved)
+        current = moved / "new_model"
+        source_run = moved / "baseline"
+        snapshot = source_run / snapshot.name
+        assert check_reuse_compatibility(target, source_run) == snapshot
 
     monkeypatch.setattr("fedproxy.reuse._tokenizer_vocab_sha256", lambda _: "wrong-vocab")
     with pytest.raises(ValueError, match="tokenizer vocabulary differs"):

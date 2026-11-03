@@ -19,6 +19,10 @@ if [[ ! -f "$CONFIG" ]]; then
   exit 2
 fi
 
+# Keep model, data, run and reuse paths stable when invoked from another directory.
+CONFIG=$(realpath -- "$CONFIG")
+cd -- "$PROJECT_DIR"
+
 export CUDA_VISIBLE_DEVICES="$GPU_IDS"
 export FEDPROXY_GPU_IDS="$GPU_IDS"
 export TOKENIZERS_PARALLELISM=false
@@ -89,11 +93,13 @@ PY
         echo "  Expected target:   $expected" >&2
         exit 2
       fi
+      # Convert validated existing links as well, so moving the project preserves them.
+      ln -sfnr -- "$expected" "$destination"
     elif [[ -e "$destination" ]]; then
       echo "Refusing to replace existing artifact: $destination" >&2
       exit 2
     else
-      ln -s -- "$expected" "$destination"
+      ln -sr -- "$expected" "$destination"
     fi
   done
 }
@@ -143,11 +149,12 @@ PY
       echo "  Expected target:   $expected" >&2
       exit 2
     fi
+    ln -sfnr -- "$expected" "$destination"
   elif [[ -e "$destination" ]]; then
     echo "Refusing to replace existing compression: $destination" >&2
     exit 2
   else
-    ln -s -- "$expected" "$destination"
+    ln -sr -- "$expected" "$destination"
   fi
 }
 

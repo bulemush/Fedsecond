@@ -203,8 +203,11 @@ def preflight(task: str, config: dict) -> dict:
     _weights_present(Path(cfg["model"]["name_or_path"]))
     _weights_present(source / "compression/proxy")
     compression = _json(source / "compression/compression_manifest.json")
-    if compression["proxy_layers"] != 16 or _json(source / "compression/proxy/config.json").get("num_hidden_layers") != 16:
-        raise ValueError(f"This approved MA configuration expects 16 proxy layers: {source}")
+    expected_layers = int(compression["original_layers"]) - math.floor(
+        int(compression["original_layers"]) * float(cfg["compression"]["remove_ratio"]))
+    if (compression["proxy_layers"] != expected_layers
+            or _json(source / "compression/proxy/config.json").get("num_hidden_layers") != expected_layers):
+        raise ValueError(f"Expected {expected_layers} proxy layers for this removal ratio: {source}")
     manifest = _json(source / "data_manifest.json")
     clients = manifest["clients"]
     if (manifest["scenario"] != "homogeneous" or manifest.get("seed") != 42
@@ -231,16 +234,19 @@ def preflight(task: str, config: dict) -> dict:
     return cfg
 
 
-def verified_task_result(task: str, cfg: dict) -> dict:
-    """Validate only this MA run, without reading any FedProxy evaluation."""
+def verified_task_result(task: str, cfg: dict, *, ma: bool = True) -> dict:
+    """Validate this run independently, without reading another method's scores."""
     run = Path(cfg["run"]["output_dir"])
     saved = _yaml(run / "resolved_config.train.yaml")
     if saved != cfg:
         raise ValueError(f"Saved MA configuration differs from the selected experiment: {run}")
-    return task_result(task, run, ma=True)
+    result = task_result(task, run, ma=ma)
+    if not result["evaluation_checkpoint_verified"]:
+        raise ValueError(f"Fused evaluation is not bound to its checkpoint: {run}")
+    return result
 
 
-def collect_suite(root: Path = DEFAULT_ROOT) -> dict:
+def collect_suite(root: Path = DEFAULT_ROOT, *, ma: bool = True) -> dict:
     results = []
     ma_settings = None
     horizons = set()
@@ -249,18 +255,18 @@ def collect_suite(root: Path = DEFAULT_ROOT) -> dict:
         if ma_settings is not None and cfg["ma"] != ma_settings:
             raise ValueError("Cannot combine tasks trained with different MA configurations")
         ma_settings = cfg["ma"]
-        horizons.add(target_rounds(cfg))
-        results.append(verified_task_result(task, cfg))
+        horizons.add(target_rounds(cfg) if ma else int(cfg["federated"]["rounds"]))
+        results.append(verified_task_result(task, cfg, ma=ma))
     if len(horizons) != 1:
         raise ValueError("Cannot average tasks with different target round counts")
     scores = summarize({item["task"]: item["task_accuracy"] for item in results})
-    return {"method": "fedproxy_ma", "scenario": "homogeneous", "model_kind": "fused",
+    return {"method": "fedproxy_ma" if ma else "fedproxy", "scenario": "homogeneous", "model_kind": "fused",
             "independent_models": 8, "rounds": horizons.pop(), **scores, "task_results": results,
-            "inference": "Single-seed descriptive results from eight independently trained MA models."}
+            "inference": "Single-seed descriptive results from eight independently trained models."}
 
 
-def write_suite_summary(root: Path) -> dict:
-    result = collect_suite(root)
+def write_suite_summary(root: Path, *, ma: bool = True) -> dict:
+    result = collect_suite(root, ma=ma)
     _write(root / "summary.json", result)
     with (root / "results.csv").open("w", encoding="utf-8-sig", newline="") as handle:
         fields = ("task", "accuracy", "accuracy_percent", "rounds", "local_epochs",
@@ -276,7 +282,7 @@ def write_suite_summary(root: Path) -> dict:
 
 
 @contextmanager
-def _suite_lock(root: Path):
+def _suite_lock(root: Path, *, label: str = "MA homogeneous"):
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".suite.lock").open("a+b") as handle:
         handle.seek(0, 2)
@@ -292,7 +298,7 @@ def _suite_lock(root: Path):
                 import fcntl
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
-            raise RuntimeError(f"Another MA homogeneous suite is running under {root}") from error
+            raise RuntimeError(f"Another {label} suite is running under {root}") from error
         try:
             yield
         finally:
@@ -304,7 +310,7 @@ def _suite_lock(root: Path):
 
 
 def _stage(stage: str, config_path: Path, gpu_ids: str) -> None:
-    print(f"[ma-homogeneous] stage={stage} config={config_path}", flush=True)
+    print(f"[experiment] stage={stage} config={config_path}", flush=True)
     subprocess.run(["bash", str(PROJECT / "scripts/run_experiment.sh"), str(config_path), gpu_ids, stage],
                    check=True, cwd=PROJECT)
 
@@ -320,21 +326,24 @@ def _freeze_config(cfg: dict) -> Path:
     return frozen
 
 
-def execute_task(task: str, cfg: dict, gpu_ids: str) -> dict:
+def execute_task(task: str, cfg: dict, gpu_ids: str, *, ma: bool = True, inputs_ready: bool = False,
+                 result_reader=None) -> dict:
     run = Path(cfg["run"]["output_dir"])
+    label = ("ma-" if ma else "fedproxy-") + cfg["data"]["scenario"]
+    read_result = result_reader or (lambda: verified_task_result(task, cfg, ma=ma))
     frozen = _freeze_config(cfg)
-    horizon = target_rounds(cfg)
+    horizon = target_rounds(cfg) if ma else int(cfg["federated"]["rounds"])
     if (run / "evaluation/fused_summary.json").is_file():
         try:
-            result = verified_task_result(task, cfg)
+            result = read_result()
         except (ValueError, FileNotFoundError, KeyError) as error:
-            print(f"[ma-homogeneous] Completing/refreshing final fusion and evaluation: {error}", flush=True)
+            print(f"[{label}] Completing/refreshing final fusion and evaluation: {error}", flush=True)
         else:
-            print(f"[ma-homogeneous] Already complete and verified: {task}", flush=True)
+            print(f"[{label}] Already complete and verified: {task}", flush=True)
             _write(run / "result.json", result)
             return result
-    _stage("reuse-audit", frozen, gpu_ids)
-    finished = completed_rounds(run, cfg, ma=True)
+    _stage("audit" if inputs_ready else "reuse-audit", frozen, gpu_ids)
+    finished = completed_rounds(run, cfg, ma=ma)
     if finished < horizon:
         _stage("dry-run", frozen, gpu_ids)
         _stage("resume" if finished else "train", frozen, gpu_ids)
@@ -348,15 +357,16 @@ def execute_task(task: str, cfg: dict, gpu_ids: str) -> dict:
         except (ValueError, FileNotFoundError, KeyError):
             valid_fusion = False
     if not valid_fusion:
-        print(f"[ma-homogeneous] stage=fuse task={task}", flush=True)
+        print(f"[{label}] stage=fuse task={task}", flush=True)
         command = [sys.executable, "-m", "fedproxy.cli", "fuse", "--config", str(frozen), "--checkpoint", str(final)]
         if (run / "exports").exists():
             command.append("--overwrite")
         subprocess.run(command, check=True, cwd=PROJECT)
     _stage("evaluate-fused", frozen, gpu_ids)
-    result = verified_task_result(task, cfg)
+    result = read_result()
     _write(run / "result.json", result)
-    print(f"[ma-homogeneous] evaluated task={task} accuracy={result['task_accuracy']:.6f}", flush=True)
+    metric = "task_accuracy" if cfg["data"]["scenario"] == "homogeneous" else "all_avg"
+    print(f"[{label}] evaluated task={task} {metric}={result[metric]:.6f}", flush=True)
     return result
 
 
