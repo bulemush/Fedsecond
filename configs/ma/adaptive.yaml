@@ -1,0 +1,8 @@
+# Exploratory: uses prior round training-task loss as the progress signal.
+extends: base.yaml
+run:
+  name: llama2_ma_adaptive_seed42
+  output_dir: runs/llama2_ma_adaptive_seed42
+ma:
+  compression:
+    retention_mode: adaptive

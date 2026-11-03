@@ -1,0 +1,29 @@
+# Shared MA settings come from the current conservative configuration.
+# This file is a template; launch one of the eight task configurations.
+extends: ../base.yaml
+run:
+  name: ma_homogeneous_template
+  output_dir: runs/MA_homogeneous/_template
+  reuse_artifacts_from: null
+  reuse_model_relocation: null
+data:
+  scenario: homogeneous
+  tasks: [obqa]
+  num_clients: 4
+  max_train_samples_per_task: 3000
+  max_input_length: 320
+  max_target_length: 128
+training:
+  local_epochs: 5
+  effective_batch_size: 16
+  micro_batch_size: 4
+  gradient_accumulation_steps: 4
+federated:
+  rounds: 10
+  participation: full
+  client_execution: parallel
+  max_parallel_clients: 0
+evaluation:
+  harness_tasks: [openbookqa]
+  num_fewshot: 0
+  primary_metric: acc

@@ -19,6 +19,10 @@ if [[ ! -f "$CONFIG" ]]; then
   exit 2
 fi
 
+# Keep config lookup relative to the caller, and runtime paths relative to the project.
+CONFIG=$(realpath -- "$CONFIG")
+cd -- "$PROJECT_DIR"
+
 RUN_DIR=$(python - "$CONFIG" <<'PY'
 import sys
 from fedproxy.config import load_config

@@ -1,0 +1,40 @@
+# Ratio30 task-level non-IID, using approved MA scheme B.
+extends: base.yaml
+run:
+  name: llama2_ma_heterogeneous_ratio30_len320_mb4_ep5_seed42
+  output_dir: runs/heterogeneous_ratio30/MA
+  diagnostic: true
+  adapter_initialization_seed: 42
+  reuse_artifacts_from: runs/heterogeneous_ratio30/FedProxy
+  reuse_model_relocation: null
+compression:
+  remove_ratio: 0.30
+data:
+  scenario: heterogeneous
+  tasks: [obqa, arc_easy, arc_challenge, commonsense_qa, sst2, mrpc, rte, mnli]
+  num_clients: 8
+  max_train_samples_per_task: 3000
+  max_input_length: 320
+  max_target_length: 128
+training:
+  local_epochs: 5
+  effective_batch_size: 16
+  micro_batch_size: 4
+  gradient_accumulation_steps: 4
+federated:
+  rounds: 10
+  participation: full
+  client_execution: parallel
+  max_parallel_clients: 0
+ma:
+  schedule:
+    train_blocks: 17
+    upload_blocks: 14
+    anchor_blocks: 1
+    q_block: 2
+    coverage_window: 1
+evaluation:
+  harness_tasks: [openbookqa, arc_easy, arc_challenge, commonsense_qa, sst2, mrpc, rte, mnli]
+  num_fewshot: 0
+  batch_size: 1
+  primary_metric: acc

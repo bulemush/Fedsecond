@@ -19,6 +19,10 @@ if [[ ! -f "$CONFIG" ]]; then
   exit 2
 fi
 
+# Keep model, data, run and reuse paths stable when invoked from another directory.
+CONFIG=$(realpath -- "$CONFIG")
+cd -- "$PROJECT_DIR"
+
 export CUDA_VISIBLE_DEVICES="$GPU_IDS"
 export FEDPROXY_GPU_IDS="$GPU_IDS"
 export TOKENIZERS_PARALLELISM=false
@@ -28,10 +32,11 @@ readarray -t RESOLVED < <(
   python - "$CONFIG" <<'PY'
 import sys
 from fedproxy.config import load_config
+from fedproxy.ma.round_budget import target_rounds
 
 cfg = load_config(sys.argv[1])
 print(cfg["run"]["output_dir"])
-print(cfg["federated"]["rounds"])
+print(target_rounds(cfg) if cfg.get("ma", {}).get("enabled") else cfg["federated"]["rounds"])
 PY
 )
 
@@ -68,6 +73,7 @@ PY
     echo "Source run lacks compression or data manifest: $source_dir" >&2
     exit 2
   fi
+  python -m fedproxy.reuse --config "$CONFIG" --source "$source_dir"
   source_abs=$(realpath -- "$source_dir")
   mkdir -p "$RUN_DIR"
   if [[ "$(realpath -- "$RUN_DIR")" == "$source_abs" ]]; then
@@ -76,18 +82,24 @@ PY
   fi
   for name in compression data_manifest.json; do
     destination="$RUN_DIR/$name"
-    expected="$source_abs/$name"
+    # The source artifact can itself be a link (e.g. ARC-Easy -> OBQA proxy).
+    # Compare both final targets so restarting a valid link chain is idempotent.
+    expected=$(realpath -- "$source_abs/$name")
     if [[ -L "$destination" ]]; then
       actual=$(realpath -- "$destination")
       if [[ "$actual" != "$expected" ]]; then
         echo "Existing link points elsewhere: $destination" >&2
+        echo "  Resolved existing: $actual" >&2
+        echo "  Expected target:   $expected" >&2
         exit 2
       fi
+      # Convert validated existing links as well, so moving the project preserves them.
+      ln -sfnr -- "$expected" "$destination"
     elif [[ -e "$destination" ]]; then
       echo "Refusing to replace existing artifact: $destination" >&2
       exit 2
     else
-      ln -s -- "$expected" "$destination"
+      ln -sr -- "$expected" "$destination"
     fi
   done
 }
@@ -128,18 +140,21 @@ PY
     exit 2
   fi
   destination="$RUN_DIR/compression"
-  expected="$source_abs/compression"
+  expected=$(realpath -- "$source_abs/compression")
   if [[ -L "$destination" ]]; then
     actual=$(realpath -- "$destination")
     if [[ "$actual" != "$expected" ]]; then
       echo "Existing compression link points elsewhere: $destination" >&2
+      echo "  Resolved existing: $actual" >&2
+      echo "  Expected target:   $expected" >&2
       exit 2
     fi
+    ln -sfnr -- "$expected" "$destination"
   elif [[ -e "$destination" ]]; then
     echo "Refusing to replace existing compression: $destination" >&2
     exit 2
   else
-    ln -s -- "$expected" "$destination"
+    ln -sr -- "$expected" "$destination"
   fi
 }
 

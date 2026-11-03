@@ -1,0 +1,9 @@
+extends: base.yaml
+run:
+  name: llama2_ma_homogeneous_ratio30_mrpc_seed42
+  output_dir: runs/homogeneous_ratio30/MA/llama2_homogeneous_mrpc_len320_mb4_seed42
+  reuse_artifacts_from: runs/homogeneous_ratio30/FedProxy/llama2_homogeneous_mrpc_len320_mb4_seed42
+data:
+  tasks: [mrpc]
+evaluation:
+  harness_tasks: [mrpc]

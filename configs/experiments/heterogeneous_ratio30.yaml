@@ -1,0 +1,37 @@
+# Eight task-specific non-IID clients train one global model.
+# Use launch_ratio30_heterogeneous_suite.sh for the full pipeline.
+extends: llama2_full_len320_mb4.yaml
+run:
+  name: llama2_fedproxy_heterogeneous_ratio30_len320_mb4_ep5_seed42
+  output_dir: runs/heterogeneous_ratio30/FedProxy
+  diagnostic: true
+  adapter_initialization_seed: 42
+  reuse_artifacts_from: null
+  reuse_model_relocation: null
+  reuse_compression_from: runs/heterogeneous_ratio30/shared
+compression:
+  remove_ratio: 0.30
+data:
+  scenario: heterogeneous
+  tasks: [obqa, arc_easy, arc_challenge, commonsense_qa, sst2, mrpc, rte, mnli]
+  num_clients: 8
+  max_train_samples_per_task: 3000
+  max_input_length: 320
+  max_target_length: 128
+training:
+  local_epochs: 5
+  effective_batch_size: 16
+  micro_batch_size: 4
+  gradient_accumulation_steps: 4
+federated:
+  rounds: 10
+  participation: full
+  client_execution: parallel
+  max_parallel_clients: 0
+ma:
+  enabled: false
+evaluation:
+  harness_tasks: [openbookqa, arc_easy, arc_challenge, commonsense_qa, sst2, mrpc, rte, mnli]
+  num_fewshot: 0
+  batch_size: 1
+  primary_metric: acc

@@ -23,6 +23,8 @@ def train_client(
     *,
     round_id: int | None = None,
     device_label: str | None = None,
+    active_names: set[str] | None = None,
+    pcr_multiplier: float = 1.0,
 ) -> ClientResult:
     started = time.perf_counter()
     training = config["training"]
@@ -42,6 +44,15 @@ def train_client(
     parameters = trainable_adapter_parameters(model)
     if set(parameters) != set(anchor):
         raise ValueError("Trainable LoRA parameters do not match the global adapter schema")
+    if active_names is not None:
+        if not active_names or not active_names <= set(parameters):
+            raise ValueError("Invalid active LoRA parameter set")
+        for name, parameter in parameters.items():
+            if name not in active_names:
+                parameter.requires_grad_(False)
+        parameters = {name: value for name, value in parameters.items() if name in active_names}
+        anchor = {name: anchor[name] for name in parameters}
+        conflict_scores = {name: conflict_scores[name] for name in parameters}
     optimizer = torch.optim.AdamW(
         parameters.values(),
         lr=float(training["learning_rate"]),
@@ -97,7 +108,7 @@ def train_client(
                     raw_regularizer = torch.zeros((), device=device)
                     if config["pcr"].get("enabled", False):
                         raw_regularizer = pcr_loss(parameters, anchor, conflict_scores)
-                        regularizer = raw_regularizer * float(config["pcr"]["lambda_reg"])
+                        regularizer = raw_regularizer * float(config["pcr"]["lambda_reg"]) * pcr_multiplier
                     elif config.get("fedprox", {}).get("enabled", False):
                         regularizer = fedprox_loss(parameters, anchor, float(config["fedprox"]["mu"]))
                         raw_regularizer = regularizer
@@ -142,7 +153,7 @@ def train_client(
                 )
                 last_progress = now
     state = export_adapter(model)
-    norm_sq = sum((state[name] - anchor[name]).square().sum() for name in state)
+    norm_sq = sum((state[name] - anchor[name]).square().sum() for name in anchor)
     denominator = max(1, batches)
     metrics = {
         "task_loss": task_total / denominator,
@@ -154,6 +165,12 @@ def train_client(
         "effective_target_tokens": float(supervised_tokens),
         "elapsed_seconds": time.perf_counter() - started,
         "peak_memory_bytes": float(torch.cuda.max_memory_allocated(device)) if device.type == "cuda" else 0.0,
+        "trainable_adapter_parameters": float(sum(value.numel() for value in parameters.values())),
+        "optimizer_state_bytes": float(sum(
+            tensor.numel() * tensor.element_size()
+            for state_values in optimizer.state.values()
+            for tensor in state_values.values() if isinstance(tensor, torch.Tensor)
+        )),
     }
     if not num_examples:
         num_examples = batches * int(training["micro_batch_size"])

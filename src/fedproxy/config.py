@@ -134,6 +134,54 @@ def validate_config(cfg: dict[str, Any], command: str | None = None) -> None:
         raise ConfigError("h_ties.rho must be at least one")
     if not 0 <= float(cfg["h_ties"]["r0"]) <= 1 or float(cfg["h_ties"]["delta"]) < 0:
         raise ConfigError("Invalid H-TIES retention parameters")
+    if cfg.get("ma", {}).get("enabled", False):
+        ma = cfg["ma"]
+        schedule = ma["schedule"]
+        anchors = int(schedule["anchor_blocks"])
+        upload = int(schedule["upload_blocks"])
+        train = int(schedule["train_blocks"])
+        if not 1 <= anchors <= upload <= train:
+            raise ConfigError("MA requires 1 <= anchor <= upload <= train blocks")
+        if int(schedule["q_block"]) < 0 or int(schedule["coverage_window"]) < 1:
+            raise ConfigError("Invalid MA coverage settings")
+        if int(schedule["coverage_window"]) != 1:
+            raise ConfigError("MA multi-round coverage windows are not implemented")
+        if ma["pcr"]["mode"] not in {"masked_sum", "active_mean_scaled"}:
+            raise ConfigError("Invalid MA PCR mode")
+        if cfg["federated"]["aggregation"] != "h_ties":
+            raise ConfigError("MA aggregation uses its own mask-aware H-TIES path")
+        compression = ma["compression"]
+        if compression["retention_mode"] not in {"fixed", "adaptive"}:
+            raise ConfigError("Unknown MA retention mode")
+        if compression["index_codec"] not in {"int32", "varint", "golomb", "bitmap"}:
+            raise ConfigError("MA supports int32, varint, Golomb and bitmap index codecs")
+        communication = ma.get("communication", {})
+        if communication.get("downlink", "full_state") not in {"full_state", "active_conflict"}:
+            raise ConfigError("MA downlink must be full_state or active_conflict")
+        for key in ("elide_zero_states", "elide_constant_states"):
+            if not isinstance(communication.get(key, False), bool):
+                raise ConfigError(f"MA communication.{key} must be boolean")
+        if not all(0 < float(compression[f"keep_{factor}"]) <= 1 for factor in ("a", "b")):
+            raise ConfigError("MA keep fractions must be in (0, 1]")
+        if not 0 <= float(compression["probe_fraction_of_k"]) <= 1:
+            raise ConfigError("Invalid MA probe fraction")
+        adaptive = compression["adaptive"]
+        if not 0 <= float(adaptive["loss_ema_decay"]) < 1:
+            raise ConfigError("Invalid MA loss EMA decay")
+        for factor in ("a", "b"):
+            if not 0 < float(adaptive[f"keep_min_{factor}"]) <= float(adaptive[f"keep_max_{factor}"]) <= 1:
+                raise ConfigError("Invalid MA adaptive keep bounds")
+        residual = ma["residual"]
+        if int(residual["max_age"]) < 0 or float(residual["decay_mu"]) < 0:
+            raise ConfigError("Invalid MA residual age/decay")
+        ag = ma["aggregation"]
+        q0 = ag["q0"]
+        if int(ag["q_min"]) < 1 or (q0 != "auto_anchor_numel" and float(q0) <= 0) or float(ag["nu"]) <= 0:
+            raise ConfigError("Invalid MA overlap/reliability thresholds")
+        if float(ag["n_ref"]) <= 1 or float(ag["rho"]) <= 1 or not 0 <= float(ag["xi"]) <= 1:
+            raise ConfigError("Invalid MA aggregation threshold")
+        if float(ag["server_lr"]) <= 0:
+            raise ConfigError("Invalid MA server learning rate")
     if command == "train" and not cfg["run"].get("synthetic") and cfg["federated"].get("rounds") is None:
         raise ConfigError("Real training requires an explicit federated.rounds")
 

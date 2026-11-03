@@ -1,0 +1,6 @@
+# Only generate the common, untrained 23-layer proxy; do not train this profile.
+extends: heterogeneous_ratio30.yaml
+run:
+  name: llama2_heterogeneous_ratio30_shared
+  output_dir: runs/heterogeneous_ratio30/shared
+  reuse_compression_from: null
