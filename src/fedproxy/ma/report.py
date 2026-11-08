@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 
 from fedproxy.reuse import normalized_reuse_sections
+from fedproxy.evaluation.protocol import validate_mnli_evaluation
 
 
 def _load(path: Path) -> dict:
@@ -80,6 +81,7 @@ def summarize_run(path: str | Path) -> dict:
     }
     shared_hash = hashlib.sha256(json.dumps(shared_config, sort_keys=True).encode()).hexdigest()
     evaluation = _load(run / "evaluation" / "fused_summary.json")
+    validate_mnli_evaluation(evaluation)
     raw_eval = _load(run / "evaluation" / "raw" / "fused_lm_eval.json")
     harness_detail = {key: raw_eval.get(key) for key in ("versions", "configs", "n-shot")}
     raw_harness_hash = hashlib.sha256(json.dumps(harness_detail, sort_keys=True, default=str).encode()).hexdigest()

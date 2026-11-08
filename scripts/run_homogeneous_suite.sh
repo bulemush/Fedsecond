@@ -31,7 +31,27 @@ for task in "${TASKS[@]}"; do
   config="configs/experiments/llama2_homogeneous_${task}_len320_mb4.yaml"
   run_dir="runs/llama2_homogeneous_${task}_len320_mb4_seed42"
   if [[ -f "$run_dir/evaluation/fused_summary.json" ]]; then
-    echo "[suite] Already complete: $task ($run_dir/evaluation/fused_summary.json)"
+    if python - "$run_dir/evaluation/fused_summary.json" "$task" <<'PY'
+import json
+import sys
+from pathlib import Path
+from fedproxy.evaluation.protocol import validate_mnli_evaluation
+
+try:
+    summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    if summary.get("model_kind") != "fused" or summary.get("synthetic") or set(summary.get("tasks", {})) != {sys.argv[2]}:
+        raise ValueError("Incomplete or unexpected task evaluation")
+    validate_mnli_evaluation(summary)
+except (ValueError, TypeError) as error:
+    print(f"[suite] Evaluation needs refreshing: {error}", flush=True)
+    raise SystemExit(1)
+PY
+    then
+      echo "[suite] Already complete: $task ($run_dir/evaluation/fused_summary.json)"
+      continue
+    fi
+    echo "[suite] Re-evaluating existing fused model: $task"
+    bash "$SCRIPT_DIR/run_experiment.sh" "$config" "$GPU_IDS" evaluate-fused
     continue
   fi
   if [[ -e "$run_dir/data_manifest.json" || -e "$run_dir/compression" || -e "$run_dir/checkpoints" || -e "$run_dir/exports" ]]; then

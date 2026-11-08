@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from fedproxy.evaluation.report import GLUE_TASKS, QA_TASKS, summarize_homogeneous_task
+from fedproxy.evaluation.protocol import protocol_fingerprint, task_overrides
 
 
 def _suite_module():
@@ -26,10 +27,13 @@ def test_suite_collects_eight_fused_models(monkeypatch):
     for index, task in enumerate(QA_TASKS + GLUE_TASKS):
         path = Path("runs") / f"llama2_homogeneous_{task}_len320_mb4_seed42" / "evaluation" / "fused_summary.json"
         accuracy = (index + 1) / 10
+        protocol = {"tasks": ["openbookqa" if task == "obqa" else task], "num_fewshot": 0, "batch_size": 1}
+        if task_overrides([task]):
+            protocol["task_overrides"] = task_overrides([task])
         contents[str(path)] = json.dumps({
             "model_kind": "fused", "synthetic": False, "task": task,
             "tasks": {task: accuracy}, "task_accuracy": accuracy,
-            "protocol": {"tasks": ["openbookqa" if task == "obqa" else task], "num_fewshot": 0, "batch_size": 1},
+            "protocol": protocol, "protocol_fingerprint": protocol_fingerprint(protocol),
         })
     monkeypatch.setattr(Path, "read_text", lambda self, **kwargs: contents[str(self)])
     result = _suite_module().collect(Path("runs"))

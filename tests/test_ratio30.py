@@ -10,10 +10,35 @@ import pytest
 from fedproxy import ratio30 as ratio
 from fedproxy.config import load_config, save_resolved_config
 from fedproxy.data.partition import partition_hash
+from fedproxy.evaluation.protocol import protocol_fingerprint
 from fedproxy.ma import homogeneous as suite
 from fedproxy.ma.round_budget import config_digest
 from fedproxy.ma.scheduler import audit_residual_delivery, plan_round
 from test_ma_homogeneous import _evaluation, _fusion, _model, _rounds, _write
+
+
+@pytest.mark.parametrize("method", ["fedproxy", "ma"])
+def test_old_mnli_protocol_refreshes_only_evaluation(simulation, method):
+    root = simulation.root
+    ratio.main(["run", "--root", str(root), "--task", "mnli", "--method", "both"])
+    run = root / ratio.FOLDERS[method] / suite.run_name("mnli")
+    path = run / "evaluation/fused_summary.json"
+    summary = suite._json(path)
+    summary["protocol"].pop("task_overrides")
+    summary["protocol_fingerprint"] = protocol_fingerprint(summary["protocol"])
+    _write(path, summary)
+    checkpoint = run / "checkpoints/round_0010/adapter.safetensors"
+    weights_before = checkpoint.read_bytes()
+    fusion = run / "exports/llm_fused/fusion_manifest.json"
+    fusion_before = fusion.read_bytes()
+    simulation.calls.clear()
+
+    ratio.main(["run", "--root", str(root), "--task", "mnli", "--method", method])
+
+    assert simulation.calls == [(run, "audit"), (run, "evaluate-fused")]
+    assert checkpoint.read_bytes() == weights_before
+    assert fusion.read_bytes() == fusion_before
+    assert suite._json(path)["protocol"]["task_overrides"]["mnli"]["version"] == "mnli_train_template_v1"
 
 
 @pytest.fixture(autouse=True)

@@ -12,6 +12,7 @@ from fedproxy import ratio30_heterogeneous as experiment
 from fedproxy.config import save_resolved_config
 from fedproxy.data.partition import heterogeneous_partition, partition_hash
 from fedproxy.evaluation.report import summarize
+from fedproxy.evaluation.protocol import protocol_fingerprint, task_overrides
 from fedproxy.ma import homogeneous as suite
 from fedproxy.ma.round_budget import config_digest
 from test_ma_homogeneous import _fusion, _model, _write
@@ -81,7 +82,8 @@ def simulation(tmp_path, monkeypatch):
         scores = {task: 0.5 + i * 0.01 + (0.02 if cfg["ma"]["enabled"] else 0)
                   for i, task in enumerate(experiment.TASKS)}
         protocol = {"tasks": experiment.HARNESS_TASKS, "num_fewshot": 0, "batch_size": 1,
-                    "primary_metric": "acc", "dtype": "bfloat16"}
+                    "primary_metric": "acc", "dtype": "bfloat16",
+                    "task_overrides": task_overrides(experiment.HARNESS_TASKS)}
         _write(run / "evaluation/fused_summary.json", {
             **summarize(scores), "protocol": protocol,
             "protocol_fingerprint": hashlib.sha256(experiment.json.dumps(protocol, sort_keys=True).encode()).hexdigest(),
@@ -229,7 +231,7 @@ def test_missing_eighth_client_residual_stops_resume(simulation, monkeypatch):
     assert simulation.calls == []
 
 
-@pytest.mark.parametrize("damage", ["binding", "missing_task", "average", "protocol", "null_scores", "null_protocol"])
+@pytest.mark.parametrize("damage", ["binding", "missing_task", "average", "protocol", "null_scores", "null_protocol", "mnli_template"])
 def test_stale_or_incomplete_evaluation_is_refreshed_without_retraining(simulation, damage):
     root = simulation.root
     args = ["run", "--root", str(root), "--method", "ma"]
@@ -246,6 +248,9 @@ def test_stale_or_incomplete_evaluation_is_refreshed_without_retraining(simulati
         value["protocol"]["num_fewshot"] = 5
     elif damage == "null_scores":
         value["tasks"] = None
+    elif damage == "mnli_template":
+        value["protocol"].pop("task_overrides")
+        value["protocol_fingerprint"] = protocol_fingerprint(value["protocol"])
     else:
         value["protocol"] = None
     _write(path, value)

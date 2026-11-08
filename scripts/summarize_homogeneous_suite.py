@@ -6,12 +6,14 @@ import json
 from pathlib import Path
 
 from fedproxy.evaluation.report import GLUE_TASKS, QA_TASKS
+from fedproxy.evaluation.protocol import validate_mnli_evaluation
 
 
 def collect(root: Path) -> dict:
     metrics: dict[str, float] = {}
     sources: dict[str, str] = {}
     reference_protocol: dict | None = None
+    task_protocols: dict = {}
     for task in QA_TASKS + GLUE_TASKS:
         path = root / f"llama2_homogeneous_{task}_len320_mb4_seed42" / "evaluation" / "fused_summary.json"
         summary = json.loads(path.read_text(encoding="utf-8"))
@@ -19,8 +21,10 @@ def collect(root: Path) -> dict:
             raise ValueError(f"Expected real fused-model evaluation: {path}")
         if summary.get("task") != task or set(summary.get("tasks", {})) != {task}:
             raise ValueError(f"Expected only {task} in {path}")
+        validate_mnli_evaluation(summary)
         protocol = dict(summary["protocol"])
         protocol.pop("tasks", None)
+        task_protocols.update(protocol.pop("task_overrides", {}))
         if reference_protocol is None:
             reference_protocol = protocol
         elif protocol != reference_protocol:
@@ -39,6 +43,7 @@ def collect(root: Path) -> dict:
         "glue_avg": glue,
         "all_avg": (qa + glue) / 2,
         "shared_protocol_fields": reference_protocol,
+        "task_overrides": task_protocols,
         "sources": sources,
     }
 

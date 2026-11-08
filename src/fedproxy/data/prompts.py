@@ -2,6 +2,13 @@ from __future__ import annotations
 
 
 PROMPT_VERSION = "unified_v1"
+MNLI_LABELS = ("entailment", "neutral", "contradiction")
+MNLI_RELATION_CUE = "Relation (entailment, neutral, or contradiction):"
+MNLI_PROMPT_TEMPLATE = "Premise: {premise}\nHypothesis: {hypothesis}\n" + MNLI_RELATION_CUE
+
+
+def mnli_prompt(premise: str, hypothesis: str) -> str:
+    return MNLI_PROMPT_TEMPLATE.format(premise=premise, hypothesis=hypothesis)
 
 
 def format_alpaca(instruction: str, input_text: str, output: str | None = None) -> str:

@@ -146,6 +146,10 @@ bash scripts/launch_ratio30_heterogeneous_suite.sh 2,3 both
 
 结果集中在 `runs/heterogeneous_ratio30/`，支持独立运行方法、同一命令恢复和八任务结果读取，见 [Ratio30 异质性训练说明](docs/ratio30_heterogeneous_training.md)。
 
+## MNLI 训练与评测模板统一
+
+MNLI 默认评测现与现有训练提示词和答案词一致：候选为 `entailment / neutral / contradiction`，仍使用 matched 验证集和 accuracy。FedProxy 与 MA 分支使用同一公共评测协议；已有模型只需重新评测，无需重新训练。旧 MNLI 成绩会备份并被识别为需要刷新，其他任务的评测定义不变。评测版本参与协议指纹，详见 [MNLI 评测说明](docs/mnli_evaluation.md)。
+
 ## 主要实现边界
 
 - 压缩只有论文明确给出的 BI 结构化剪枝，没有臆造 KL 蒸馏。

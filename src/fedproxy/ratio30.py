@@ -155,7 +155,8 @@ def _check_snapshots(cfg: dict, *, shared: bool = False) -> None:
         raise ValueError(f"This suite requires 10 rounds; a round extension exists: {run}")
 
 
-def _check_run(cfg: dict, method: str, task: str, *, partition_validator=None) -> None:
+def _check_run(cfg: dict, method: str, task: str, *, partition_validator=None,
+               check_checkpoints: bool = True) -> None:
     run = Path(cfg["run"]["output_dir"])
     _check_snapshots(cfg)
     if (run / "data_manifest.json").is_file():
@@ -163,6 +164,10 @@ def _check_run(cfg: dict, method: str, task: str, *, partition_validator=None) -
             check_partition(task, run / "data_manifest.json")
         else:
             partition_validator(run / "data_manifest.json")
+    if not check_checkpoints:
+        # An unselected FedProxy run supplies only the initial proxy/partition.
+        # Its retained training checkpoints are irrelevant to MA continuation.
+        return
     finished = suite.completed_rounds(run, cfg, ma=method == "ma")
     if finished:
         if not (run / "resolved_config.train.yaml").is_file():
@@ -198,7 +203,7 @@ def preflight(root: Path, tasks: tuple, methods: tuple) -> tuple[dict, dict]:
             raise ValueError(f"FedProxy/MA input and training settings differ: {task}")
         for method in set(methods) | {"fedproxy"}:
             cfg = pair[method]
-            _check_run(cfg, method, task)
+            _check_run(cfg, method, task, check_checkpoints=method in methods)
             run = Path(cfg["run"]["output_dir"])
             _check_link(run / "compression", root / "shared/compression")
             if method == "ma":

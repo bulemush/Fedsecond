@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .prompts import qa_prompt
+from .prompts import MNLI_LABELS, mnli_prompt, qa_prompt
 
 
 @dataclass(frozen=True)
@@ -49,8 +49,8 @@ def convert_row(task: str, row: dict[str, Any], index: int, dataset=None) -> Tas
         mapping = {"entailment": "yes", "not_entailment": "no"}
         prompt = f"Premise: {row['sentence1']}\nHypothesis: {row['sentence2']}\nEntailment (yes or no):"
     elif task == "mnli":
-        mapping = {"entailment": "entailment", "neutral": "neutral", "contradiction": "contradiction"}
-        prompt = f"Premise: {row['premise']}\nHypothesis: {row['hypothesis']}\nRelation (entailment, neutral, or contradiction):"
+        mapping = {name: name for name in MNLI_LABELS}
+        prompt = mnli_prompt(row["premise"], row["hypothesis"])
     else:
         raise KeyError(task)
     if label not in mapping:

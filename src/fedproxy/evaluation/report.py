@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .protocol import validate_mnli_evaluation
+
 
 QA_TASKS = ("obqa", "arc_easy", "arc_challenge", "commonsense_qa")
 GLUE_TASKS = ("sst2", "mrpc", "rte", "mnli")
@@ -29,6 +31,7 @@ def compare_runs(runs_root: str | Path) -> list[dict]:
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("synthetic") or data.get("diagnostic"):
             continue
+        validate_mnli_evaluation(data)
         rows.append({"run": path.parents[1].name, **data})
     fingerprints = {row.get("protocol_fingerprint") for row in rows}
     if len(fingerprints) > 1:

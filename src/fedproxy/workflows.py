@@ -18,6 +18,11 @@ from fedproxy.data.partition import fixed_subsample, heterogeneous_partition, ii
 from fedproxy.data.prompts import format_alpaca
 from fedproxy.data.registry import dataset_storage_path, load_registered
 from fedproxy.evaluation.harness import evaluate_with_lm_eval
+from fedproxy.evaluation.protocol import (
+    archive_previous_mnli_evaluation,
+    protocol_fingerprint,
+    task_overrides,
+)
 from fedproxy.evaluation.report import compare_runs, summarize, summarize_homogeneous_task
 from fedproxy.federated.client import estimate_optimizer_steps, train_client
 from fedproxy.federated.server import run_federated
@@ -613,6 +618,9 @@ def evaluate(cfg: dict, model_kind: str) -> dict:
     else:
         model_path = run / ("exports/llm_fused" if model_kind == "fused" else "exports/proxy_tuned")
     tasks = list(cfg["evaluation"]["harness_tasks"])
+    archive = archive_previous_mnli_evaluation(run, model_kind, tasks)
+    if archive is not None:
+        print(f"[evaluate] archived previous MNLI evaluation to {archive}", flush=True)
     raw_path = run / "evaluation" / "raw" / f"{model_kind}_lm_eval.json"
     dtype = str(resolve_dtype(cfg["model"].get("dtype", "auto"))).removeprefix("torch.")
     print(f"[evaluate] model_kind={model_kind} dtype={dtype} model_path={model_path}", flush=True)
@@ -641,8 +649,10 @@ def evaluate(cfg: dict, model_kind: str) -> dict:
         "primary_metric": cfg["evaluation"]["primary_metric"],
         "dtype": dtype,
     }
+    if task_overrides(tasks):
+        protocol["task_overrides"] = task_overrides(tasks)
     summary.update({
-        "protocol_fingerprint": hashlib.sha256(json.dumps(protocol, sort_keys=True).encode()).hexdigest(),
+        "protocol_fingerprint": protocol_fingerprint(protocol),
         "protocol": protocol,
         "model_kind": model_kind,
         "synthetic": bool(cfg["run"].get("synthetic", False)),

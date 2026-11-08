@@ -13,6 +13,7 @@ import yaml
 
 from fedproxy.config import load_config, save_resolved_config
 from fedproxy.data.partition import partition_hash
+from fedproxy.evaluation.protocol import protocol_fingerprint, task_overrides
 from fedproxy.ma import homogeneous as suite
 
 
@@ -62,10 +63,14 @@ def _fusion(path):
 
 def _evaluation(path, task, score=0.6):
     manifest = path / "exports/llm_fused/fusion_manifest.json"
+    protocol = {"tasks": ["openbookqa" if task == "obqa" else task], "num_fewshot": 0,
+                "batch_size": 1, "primary_metric": "acc", "dtype": "bfloat16"}
+    if task_overrides([task]):
+        protocol["task_overrides"] = task_overrides([task])
     _write(path / "evaluation/fused_summary.json", {
         "model_kind": "fused", "synthetic": False, "task": task,
         "tasks": {task: score}, "task_accuracy": score,
-        "protocol_fingerprint": task,
+        "protocol": protocol, "protocol_fingerprint": protocol_fingerprint(protocol),
         "fusion_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
     })
     _write(path / "evaluation/raw/fused_lm_eval.json", {"versions": {task: 1}, "configs": {task: {}}, "n-shot": {task: 0}})

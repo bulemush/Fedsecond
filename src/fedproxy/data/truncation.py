@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from .prompts import MNLI_RELATION_CUE
 from .tasks import TaskExample
 
 
@@ -26,7 +27,7 @@ def required_cue(task: str) -> str | None:
         "sst2": "Sentiment (negative or positive):",
         "mrpc": "Equivalent (no or yes):",
         "rte": "Entailment (yes or no):",
-        "mnli": "Relation (entailment, neutral, or contradiction):",
+        "mnli": MNLI_RELATION_CUE,
     }.get(task)
 
 

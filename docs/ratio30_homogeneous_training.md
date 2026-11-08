@@ -96,7 +96,7 @@ bash scripts/launch_ratio30_homogeneous_suite.sh 2,3 ma all
 bash scripts/launch_ratio30_homogeneous_suite.sh 2,3 both arc_challenge
 ```
 
-仅运行 MA 时，套件会在 FedProxy 子目录中准备必要的初始代理链接和数据划分，随后只训练 MA；不要求 FedProxy 已完成训练或评测。
+仅运行 MA 时，套件会在 FedProxy 子目录中准备必要的初始代理链接和数据划分，随后只训练 MA；不要求 FedProxy 已完成训练或评测，也不检查其历史训练 checkpoint 是否完整连续。清理 FedProxy 的中间轮次不会阻止 MA 续训，但初始代理、数据划分及其来源配置仍须保留。
 
 启动器打印后台 PID 和日志路径，并打开日志查看。Ctrl+C 只停止查看，nohup 后台作业继续。GPU 编号可替换，但必须是两张不同且可见的卡。客户端训练阶段双卡各跑一个客户端；压缩、审计、融合和评估按原流程执行，不要求它们同时占满两张卡。23 层代理比原 16 层代理更大，dry-run 使用实际代理检查调度，真实显存与耗时以服务器运行记录为准。
 
