@@ -39,6 +39,15 @@ def aggregate(
     nu = float(ac["nu"])
     n_ref = float(ac["n_ref"])
     xi = float(ac["xi"])
+    similarity_scope = ac.get("similarity_scope", "intersection")
+    merge_rule = ac.get("merge_rule", "dominant_sign")
+    full_norms = []
+    if similarity_scope == "union":
+        full_norms = [
+            sum(float(torch.dot(values.double(), values.double()))
+                for _, values, _ in observation.records.values())
+            for observation in observations
+        ]
     if n_ref <= 1:
         raise ValueError("n_ref must exceed one")
     evidence = [0.0] * count
@@ -64,6 +73,8 @@ def aggregate(
                 fresh_sum_j += matched * rj[2]
             if common < q_min or norm_i <= eps * eps or norm_j <= eps * eps:
                 continue
+            if similarity_scope == "union":
+                norm_i, norm_j = full_norms[i], full_norms[j]
             cosine = max(-1.0, min(1.0, dot / math.sqrt(norm_i * norm_j)))
             omega = common / (common + q0) * math.sqrt(fresh_sum_i / common * fresh_sum_j / common)
             evidence[i] += omega
@@ -128,6 +139,12 @@ def aggregate(
         update = torch.zeros(size, dtype=torch.float32)
         update[dominant_pos] = (pos_mag[dominant_pos] / pos_weight[dominant_pos]).float()
         update[dominant_neg] = (-neg_mag[dominant_neg] / neg_weight[dominant_neg]).float()
+        if merge_rule == "observed_mean":
+            total_weight = pos_weight + neg_weight
+            contributed = total_weight > 0
+            update[contributed] = (
+                (pos_mag[contributed] - neg_mag[contributed]) / total_weight[contributed]
+            ).float()
         merged[name] = update.reshape(entry.shape)
         wf = fresh_weight
         effective = torch.where(weight_sq > 0, wf.square() / weight_sq.clamp_min(1e-30), 0.0)

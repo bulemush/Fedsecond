@@ -73,6 +73,12 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
     initial = export_adapter(initial_model)
     del initial_model
     registry = BlockRegistry.from_spec(ParameterSpec.from_state(initial))
+    initialization = None
+    if cfg.get("ma_ablation"):
+        from .ablations import check_training_inputs
+
+        initial_hash = hashlib.sha256(flatten_state(initial, registry.spec).numpy().tobytes()).hexdigest()
+        initialization = check_training_inputs(cfg, registry, initial_hash)
     client_ids = list(manifest["clients"])
     config_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
     invariants = {
@@ -97,6 +103,8 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
             },
         }
     _write_json(run_dir / "metrics" / "schedule_audit.json", schedule_audit)
+    if initialization is not None:
+        _write_json(run_dir / "metrics" / "ablation_initialization.json", initialization)
     checkpoint_root = run_dir / "checkpoints"
     if resume:
         loaded = load_checkpoint(resume, expected_state=initial, expected_metadata=invariants)

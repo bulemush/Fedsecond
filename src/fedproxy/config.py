@@ -151,6 +151,11 @@ def validate_config(cfg: dict[str, Any], command: str | None = None) -> None:
         if cfg["federated"]["aggregation"] != "h_ties":
             raise ConfigError("MA aggregation uses its own mask-aware H-TIES path")
         compression = ma["compression"]
+        if compression.get("selection", "magnitude") not in {"magnitude", "random"}:
+            raise ConfigError("MA selection must be magnitude or random")
+        if (compression.get("selection", "magnitude") == "random"
+                and float(compression["probe_fraction_of_k"]) != 0):
+            raise ConfigError("Random coordinate selection requires probe_fraction_of_k=0")
         if compression["retention_mode"] not in {"fixed", "adaptive"}:
             raise ConfigError("Unknown MA retention mode")
         if compression["index_codec"] not in {"int32", "varint", "golomb", "bitmap"}:
@@ -175,6 +180,10 @@ def validate_config(cfg: dict[str, Any], command: str | None = None) -> None:
         if int(residual["max_age"]) < 0 or float(residual["decay_mu"]) < 0:
             raise ConfigError("Invalid MA residual age/decay")
         ag = ma["aggregation"]
+        if ag.get("similarity_scope", "intersection") not in {"intersection", "union"}:
+            raise ConfigError("MA similarity_scope must be intersection or union")
+        if ag.get("merge_rule", "dominant_sign") not in {"dominant_sign", "observed_mean"}:
+            raise ConfigError("MA merge_rule must be dominant_sign or observed_mean")
         q0 = ag["q0"]
         if int(ag["q_min"]) < 1 or (q0 != "auto_anchor_numel" and float(q0) <= 0) or float(ag["nu"]) <= 0:
             raise ConfigError("Invalid MA overlap/reliability thresholds")

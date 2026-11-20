@@ -89,9 +89,16 @@ def build_update(
             keep = float(cc[f"keep_{factor}"])
             k = min(entry.numel, max(1, math.ceil(keep * entry.numel)))
             probes = math.floor(k * float(cc.get("probe_fraction_of_k", 0.0)))
-            indices = _selected_indices(
-                candidate, k, probes, derived_seed(int(cfg["run"]["seed"]), plan.round_id, name)
-            )
+            if cc.get("selection", "magnitude") == "random":
+                seed = derived_seed(
+                    int(cfg["run"]["seed"]), plan.client_id, plan.round_id, name, "random_k"
+                )
+                chosen = np.random.default_rng(seed).choice(entry.numel, k, replace=False)
+                indices = torch.from_numpy(np.sort(chosen).astype(np.int64))
+            else:
+                indices = _selected_indices(
+                    candidate, k, probes, derived_seed(int(cfg["run"]["seed"]), plan.round_id, name)
+                )
         mass = float(raw_mass[indices].sum())
         freshness = float(decayed_mass[indices].sum()) / mass if mass > 0 else 1.0
         records[name] = (indices, candidate[indices].contiguous(), min(1.0, max(0.0, freshness)))
