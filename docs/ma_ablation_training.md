@@ -41,6 +41,8 @@ bash scripts/launch_ma_ablation_suite.sh 0,1 all runs/heterogeneous_ratio30/MA r
 
 前台运行使用 `scripts/run_ma_ablation_suite.sh`，参数相同。四组按 A1、A2、A3、A4 顺序运行。任一步失败即停，修复后使用原命令恢复。流程复用已完成并核验过的组，未完成的组从最后完整 checkpoint 恢复，保留原 MA 的 pending 包重放和残差提交逻辑。输出根目录上的运行锁避免同一套实验被重复启动。
 
+如果 A1 已完成评测，但旧版在汇总时因 `harness_detail_hash mismatch` 停止，更新代码后可先用下文的 `summarize` 核对。lm-eval 为每组记录的融合模型目录不同，汇总时会识别各组自己的 `metadata.pretrained`。A1 通过核对后，原启动命令会直接复用它的评测并进入下一组。如果 `invalid.A1` 仍列出任务配置差异，按列出的字段对齐到完整 MA 的评测设置。评测可以复用已有融合模型。
+
 ## 训练前后的核验
 
 - 逐轮比对参考 MA 与新组的训练层、上传层和锚点名单。逐客户端比对已有记录中的优化步数、有效目标 token、可训练参数数和上传坐标数。

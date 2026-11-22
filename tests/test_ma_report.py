@@ -143,6 +143,31 @@ def test_harness_comparison_ignores_only_function_memory_addresses(tmp_path):
     assert (candidate / raw).read_bytes() == saved
 
 
+def test_harness_comparison_ignores_own_fused_paths_and_keeps_other_metadata(tmp_path):
+    baseline, candidate = tmp_path / "base", tmp_path / "ma"
+    _run(baseline, False)
+    _run(candidate, True)
+    raw_path = Path("evaluation/raw/fused_lm_eval.json")
+    base_raw, candidate_raw = _harness(), _harness()
+    task = candidate_raw["configs"]["openbookqa"]
+    task["metadata"] = {"pretrained": str(candidate / "exports/llm_fused")}
+    _write(baseline / raw_path, base_raw)
+    _write(candidate / raw_path, candidate_raw)
+    compare(baseline, [candidate])
+
+    task["metadata"]["dtype"] = "bfloat16"
+    base_raw["configs"]["openbookqa"]["metadata"] = {"dtype": "float16"}
+    _write(baseline / raw_path, base_raw)
+    _write(candidate / raw_path, candidate_raw)
+    with pytest.raises(HarnessMismatchError, match=r"configs\.openbookqa\.metadata\.dtype"):
+        compare(baseline, [candidate])
+
+    task["metadata"] = {"dtype": "float16", "pretrained": str(baseline / "exports/llm_fused")}
+    _write(candidate / raw_path, candidate_raw)
+    with pytest.raises(HarnessMismatchError, match=r"configs\.openbookqa\.metadata\.pretrained"):
+        compare(baseline, [candidate])
+
+
 @pytest.mark.parametrize("field", ["function", "prompt", "metric", "dataset", "split", "version", "shots", "filter", "missing"])
 def test_harness_comparison_still_rejects_real_task_differences(tmp_path, field):
     baseline, candidate = tmp_path / "base", tmp_path / "ma"

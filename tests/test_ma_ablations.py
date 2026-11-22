@@ -19,6 +19,7 @@ from fedproxy.ma import ablations as experiment
 from fedproxy.ma.aggregation import aggregate
 from fedproxy.ma.client import build_update
 from fedproxy.ma.codec import Observation
+from fedproxy.ma.report import HarnessMismatchError
 from fedproxy.ma.schema import BlockRegistry, ClientPlan
 from fedproxy.utils.checkpoint import save_checkpoint
 
@@ -214,7 +215,11 @@ def create_evaluation(run, score=0.6):
         "protocol": protocol, "protocol_fingerprint": protocol_fingerprint(protocol),
         "fusion_manifest_sha256": experiment._sha(fusion),
     })
-    write(run / "evaluation/raw/fused_lm_eval.json", {"versions": dict.fromkeys(tasks, 1)})
+    write(run / "evaluation/raw/fused_lm_eval.json", {
+        "versions": dict.fromkeys(tasks, 1),
+        "configs": {task: {"metadata": {"pretrained": str(fusion.parent), "dtype": "bfloat16"}}
+                    for task in tasks},
+    })
 
 
 @pytest.fixture
@@ -303,10 +308,11 @@ def test_suite_runs_four_variants_resumes_and_summarizes_a3(reference, tmp_path,
     root = tmp_path / "ablations"
     original_bytes = (reference / "resolved_config.train.yaml").read_bytes()
     calls = []
+    initial_evaluation_interrupted = False
     interrupted = False
 
     def stage(name, frozen, gpu_ids):
-        nonlocal interrupted
+        nonlocal initial_evaluation_interrupted, interrupted
         cfg = experiment.suite._yaml(frozen)
         run = Path(cfg["run"]["output_dir"])
         calls.append((run.name, name))
@@ -323,6 +329,9 @@ def test_suite_runs_four_variants_resumes_and_summarizes_a3(reference, tmp_path,
             write(run / "metrics/ablation_initialization.json", {"evidence": "fixture"})
         if name == "evaluate-fused":
             create_evaluation(run, score=0.58)
+            if run.name == "A1" and not initial_evaluation_interrupted:
+                initial_evaluation_interrupted = True
+                raise RuntimeError("interrupt after A1 evaluation")
 
     def fuse(arguments, **kwargs):
         cfg = experiment.suite._yaml(Path(arguments[arguments.index("--config") + 1]))
@@ -353,8 +362,17 @@ def test_suite_runs_four_variants_resumes_and_summarizes_a3(reference, tmp_path,
     monkeypatch.setattr(experiment.suite, "_stage", stage)
     monkeypatch.setattr(experiment.suite.subprocess, "run", fuse)
     args = ["run", "--reference", str(reference), "--root", str(root)]
+    with pytest.raises(RuntimeError, match="interrupt after A1 evaluation"):
+        experiment.main(args)
+    assert not (root / "A1/result.json").exists()
+    a1_raw = root / "A1/evaluation/raw/fused_lm_eval.json"
+    a1_evaluation = a1_raw.read_bytes()
+    a1_calls = [call for call in calls if call[0] == "A1"]
     with pytest.raises(RuntimeError, match="interrupt at A2"):
         experiment.main(args)
+    assert (root / "A1/result.json").is_file()
+    assert a1_raw.read_bytes() == a1_evaluation
+    assert [call for call in calls if call[0] == "A1"] == a1_calls
     first = (root / "A2/checkpoints/round_0001/metadata.json").read_bytes()
     experiment.main(args)
     assert (root / "A2/checkpoints/round_0001/metadata.json").read_bytes() == first
@@ -368,6 +386,15 @@ def test_suite_runs_four_variants_resumes_and_summarizes_a3(reference, tmp_path,
     calls.clear()
     experiment.main(args)
     assert calls == []
+    raw_path = root / "A4/evaluation/raw/fused_lm_eval.json"
+    raw = experiment.suite._json(raw_path)
+    raw["configs"]["openbookqa"]["test_split"] = "validation"
+    write(raw_path, raw)
+    with pytest.raises(HarnessMismatchError, match=r"configs\.openbookqa\.test_split"):
+        experiment.main(args)
+    assert calls == []
+    del raw["configs"]["openbookqa"]["test_split"]
+    write(raw_path, raw)
     stale_path = root / "A4/evaluation/fused_summary.json"
     stale = experiment.suite._json(stale_path)
     stale["fusion_manifest_sha256"] = "stale"

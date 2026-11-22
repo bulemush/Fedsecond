@@ -21,7 +21,7 @@ from fedproxy.config import load_config, save_resolved_config, validate_config
 from fedproxy.data.partition import partition_hash
 from fedproxy.evaluation.report import QA_TASKS, GLUE_TASKS, summarize
 from fedproxy.ma.execution import REQUIRED_PARALLEL_ENV, device_assignment, resolve_parallelism
-from fedproxy.ma.report import summarize_run
+from fedproxy.ma.report import HarnessMismatchError, summarize_run
 from fedproxy.ma.round_budget import target_rounds
 from fedproxy.reuse import check_reuse_compatibility, normalized_reuse_sections
 
@@ -336,6 +336,8 @@ def execute_task(task: str, cfg: dict, gpu_ids: str, *, ma: bool = True, inputs_
     if (run / "evaluation/fused_summary.json").is_file():
         try:
             result = read_result()
+        except HarnessMismatchError:
+            raise
         except (ValueError, FileNotFoundError, KeyError) as error:
             print(f"[{label}] Completing/refreshing final fusion and evaluation: {error}", flush=True)
         else:

@@ -38,9 +38,23 @@ def _stable_task_config(value):
     return value
 
 
-def _harness_details(raw: dict) -> dict:
-    return {"versions": raw.get("versions"),
-            "configs": _stable_task_config(raw.get("configs")), "n-shot": raw.get("n-shot")}
+def _harness_details(raw: dict, run: Path, recorded_output: str | None) -> dict:
+    configs = _stable_task_config(raw.get("configs"))
+    fused = Path("exports/llm_fused")
+    actual_path = (run / fused).resolve()
+    recorded_path = Path(recorded_output) / fused if recorded_output else actual_path
+    # lm-eval copies model_args into task metadata. Each run has its own fused model.
+    if isinstance(configs, dict):
+        for config in configs.values():
+            metadata = config.get("metadata") if isinstance(config, dict) else None
+            pretrained = metadata.get("pretrained") if isinstance(metadata, dict) else None
+            if isinstance(pretrained, str) and pretrained:
+                path = Path(pretrained)
+                if path == recorded_path or path.resolve() == actual_path:
+                    del metadata["pretrained"]
+                    if not metadata:
+                        del config["metadata"]
+    return {"versions": raw.get("versions"), "configs": configs, "n-shot": raw.get("n-shot")}
 
 
 def _detail_differences(baseline, candidate, prefix="harness"):
@@ -59,17 +73,24 @@ def _detail_differences(baseline, candidate, prefix="harness"):
 
 def _harness_mismatch(baseline: str | Path, candidate: str | Path) -> HarnessMismatchError:
     relative = Path("evaluation/raw/fused_lm_eval.json")
-    base_file, candidate_file = Path(baseline) / relative, Path(candidate) / relative
-    differences = list(islice(_detail_differences(
-        _harness_details(_load(base_file)), _harness_details(_load(candidate_file))
-    ), 12))
+    runs = (Path(baseline), Path(candidate))
+    details = []
+    for run in runs:
+        snapshot = yaml.safe_load((run / "resolved_config.train.yaml").read_text(encoding="utf-8"))
+        details.append(_harness_details(_load(run / relative), run, snapshot["run"].get("output_dir")))
+    differences = list(islice(_detail_differences(*details), 12))
     return HarnessMismatchError(
         f"harness_detail_hash mismatch: {candidate}\n"
         + "\n".join(differences)
-        + f"\nRaw evaluations: {base_file} ; {candidate_file}\n"
+        + f"\nRaw evaluations: {runs[0] / relative} ; {runs[1] / relative}\n"
         "Re-evaluate the existing fused models with the same lm-eval task definitions. "
         "Training checkpoints can be retained."
     )
+
+
+def verify_harness_match(baseline: dict, candidate: dict) -> None:
+    if candidate["harness_detail_hash"] != baseline["harness_detail_hash"]:
+        raise _harness_mismatch(baseline["run"], candidate["run"])
 
 
 def summarize_run(path: str | Path) -> dict:
@@ -85,7 +106,8 @@ def summarize_run(path: str | Path) -> dict:
     raw_eval = _load(run / "evaluation" / "raw" / "fused_lm_eval.json")
     harness_detail = {key: raw_eval.get(key) for key in ("versions", "configs", "n-shot")}
     raw_harness_hash = hashlib.sha256(json.dumps(harness_detail, sort_keys=True, default=str).encode()).hexdigest()
-    harness_hash = hashlib.sha256(json.dumps(_harness_details(raw_eval), sort_keys=True).encode()).hexdigest()
+    details = _harness_details(raw_eval, run, resolved["run"].get("output_dir"))
+    harness_hash = hashlib.sha256(json.dumps(details, sort_keys=True).encode()).hexdigest()
     partition_hash = _load(run / "data_manifest.json")["partition_hash"]
     compression_hash = hashlib.sha256(
         (run / "compression" / "compression_manifest.json").read_bytes()
@@ -152,7 +174,7 @@ def summarize_run(path: str | Path) -> dict:
         "partition_hash": partition_hash, "compression_manifest_hash": compression_hash,
         "harness_detail_hash": harness_hash,
         "harness_detail_raw_hash": raw_harness_hash,
-        "harness_hash_normalization": "python_function_addresses_v1",
+        "harness_hash_normalization": "python_function_addresses_and_run_model_path_v2",
         "all_avg": evaluation.get("all_avg"), "qa_avg": evaluation.get("qa_avg"),
         "glue_avg": evaluation.get("glue_avg"), "tasks": evaluation["tasks"],
         "uplink_bytes": up, "downlink_bytes": down, "downlink_accounting": down_accounting,
@@ -183,8 +205,7 @@ def compare(baseline: str | Path, candidates: list[str | Path]) -> dict:
         for key in ("partition_hash", "compression_manifest_hash"):
             if item[key] != base[key]:
                 raise ValueError(f"{key} mismatch: {path}")
-        if item["harness_detail_hash"] != base["harness_detail_hash"]:
-            raise _harness_mismatch(baseline, path)
+        verify_harness_match(base, item)
         if item["rounds"] != base["rounds"]:
             raise ValueError(f"Training round mismatch: {path}")
         item["all_delta_pp"] = (

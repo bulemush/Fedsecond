@@ -18,7 +18,7 @@ from fedproxy.data.partition import partition_hash
 from fedproxy.evaluation.report import GLUE_TASKS, QA_TASKS, summarize
 from fedproxy.ma import homogeneous as suite
 from fedproxy.ma.execution import REQUIRED_PARALLEL_ENV, resolve_parallelism
-from fedproxy.ma.report import summarize_run
+from fedproxy.ma.report import summarize_run, verify_harness_match
 from fedproxy.ma.scheduler import plan_round
 from fedproxy.ma.schema import BlockRegistry
 
@@ -219,9 +219,10 @@ def variant_result(cfg: dict, context: dict) -> dict:
     result = verified_scores(run, cfg)
     base = context["result"]
     for key in ("seed", "partition_hash", "compression_manifest_hash", "protocol_fingerprint",
-                "harness_detail_hash", "downlink_accounting"):
+                "downlink_accounting"):
         if result[key] != base[key]:
             raise ValueError(f"Ablation/reference {key} mismatch: {run}")
+    verify_harness_match(base, result)
     verified_fields = set()
     reference = Path(context["provenance"]["reference_run"])
     for number in range(1, 11):
