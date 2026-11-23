@@ -146,6 +146,19 @@ bash scripts/launch_ratio30_heterogeneous_suite.sh 2,3 both
 
 结果集中在 `runs/heterogeneous_ratio30/`，支持独立运行方法、同一命令恢复和八任务结果读取，见 [Ratio30 异质性训练说明](docs/ratio30_heterogeneous_training.md)。
 
+## 汇总已完成的实验
+
+在项目根目录运行（Python 3.10+，无需 GPU 或安装第三方包）：
+
+```bash
+python scripts/collect_experiment_results.py
+python scripts/collect_experiment_results.py --runs-dir /path/to/runs --output-dir reports/experiment_summary
+```
+
+默认递归扫描本项目的 `runs/`，也可以指定单个实验、套件根目录或从服务器复制的结果目录。输出 `evaluation_results.csv`（逐运行和模型的准确率、评测协议及可核验的通信量）、`run_status.csv`（进度与异常）及 `experiment_summary.md`（融合模型概览）。准确率列以百分数表示，通信量以字节表示，下行统计以 `downlink_accounting` 为准。
+
+每个已评测的任务可独立收录，不要求同一套件全部完成。诊断结果保留标记，合成结果、归档和可识别的过期评测不进成绩表。只复制 JSON 时，可一并复制融合清单、轮次预算、最后一个 checkpoint 的 `metadata.json` 和 `metrics/aggregation.json` 来保留核验和通信量信息；无需复制模型权重。缺少融合清单或旧结果无绑定时会明确标记，不视为已核验。
+
 ## MNLI 训练与评测模板统一
 
 MNLI 默认评测现与现有训练提示词和答案词一致：候选为 `entailment / neutral / contradiction`，仍使用 matched 验证集和 accuracy。FedProxy 与 MA 分支使用同一公共评测协议；已有模型只需重新评测，无需重新训练。旧 MNLI 成绩会备份并被识别为需要刷新，其他任务的评测定义不变。评测版本参与协议指纹，详见 [MNLI 评测说明](docs/mnli_evaluation.md)。

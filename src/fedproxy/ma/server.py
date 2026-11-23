@@ -4,9 +4,7 @@ import copy
 import hashlib
 import json
 import math
-import multiprocessing
 import time
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import torch
@@ -18,10 +16,10 @@ from fedproxy.utils.checkpoint import load_checkpoint, save_checkpoint
 from fedproxy.utils.reproducibility import seed_everything
 
 from .aggregation import aggregate
-from .client import run_client_job
+from .client import replay_client_job, run_client_job
 from .codec import decode_packet
 from .downlink import encode_downlink
-from .execution import client_waves, device_assignment, resolve_parallelism
+from .execution import GIB, device_assignment, minimum_free_bytes, resolve_parallelism, run_gpu_jobs
 from .round_budget import target_rounds
 from .scheduler import audit_residual_delivery, plan_round
 from .schema import BlockRegistry
@@ -64,8 +62,11 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
     execution = cfg["federated"]["client_execution"]
     visible = torch.cuda.device_count()
     parallelism = resolve_parallelism(cfg["federated"], len(manifest["clients"]), visible)
+    min_free_bytes = minimum_free_bytes() if execution == "parallel" else None
     mapping = ", ".join(device_assignment(index) for index in range(parallelism)) if execution == "parallel" else "sequential"
     print(f"[ma] execution={execution} visible_gpus={visible} parallel_clients={parallelism} devices={mapping}", flush=True)
+    if min_free_bytes is not None:
+        print(f"[ma] dynamic client dispatch with >{min_free_bytes / GIB:g} GiB free per GPU", flush=True)
     if cfg["data"].get("truncation_audit", True):
         audit_training_prompts(cfg, manifest, tokenizer_path=proxy_path if resume else None)
     seed_everything(int(cfg["run"].get("adapter_initialization_seed", cfg["run"]["seed"])))
@@ -174,34 +175,25 @@ def train_ma(cfg: dict, resume: str | None = None, dry_run: bool = False) -> dic
             })
             if not serialized_downlink:
                 jobs[-1].update(base_vector=base_vector, conflict_vector=conflict_vector)
-        packets = []
         downlink_packet_bytes = {}
-        for wave_number, wave in enumerate(client_waves(jobs, parallelism, execution), 1):
-            assignments = ", ".join(
-                f"{job['client_id']}->{device_assignment(job['device_index'])}"
-                if execution == "parallel" else job["client_id"] for job in wave
-            )
-            print(f"[ma] round={round_id + 1}/{rounds} wave={wave_number} {assignments}", flush=True)
+
+        def prepare_job(job):
             if serialized_downlink:
-                # Encode only the current wave, avoiding K simultaneous full P copies.
-                for job in wave:
-                    wire = encode_downlink(
-                        base, conflict, registry, job["plan"], base_hash=base_hash, run_hash=config_hash,
-                        elide_zero=communication.get("elide_zero_states", False),
-                        elide_constant=communication.get("elide_constant_states", False),
-                    )
-                    job["downlink_wire"] = wire
-                    downlink_packet_bytes[job["client_id"]] = len(wire)
-                del wire
-            if execution == "parallel":
-                with ProcessPoolExecutor(
-                    max_workers=len(wave), mp_context=multiprocessing.get_context("spawn")
-                ) as executor:
-                    packets.extend(executor.map(run_client_job, wave))
-            else:
-                packets.extend(run_client_job(job) for job in wave)
-            for job in wave:
-                job.pop("downlink_wire", None)
+                wire = encode_downlink(
+                    base, conflict, registry, job["plan"], base_hash=base_hash, run_hash=config_hash,
+                    elide_zero=communication.get("elide_zero_states", False),
+                    elide_constant=communication.get("elide_constant_states", False),
+                )
+                downlink_packet_bytes[job["client_id"]] = len(wire)
+                return {**job, "downlink_wire": wire}
+            return job
+
+        if execution == "parallel":
+            packets = run_gpu_jobs(
+                jobs, parallelism, prepare_job, run_client_job, replay_client_job, min_free_bytes
+            )
+        else:
+            packets = [run_client_job(prepare_job(job)) for job in jobs]
         if [packet["client_id"] for packet in packets] != client_ids:
             raise ValueError("Client packet order/identity differs from scheduled clients")
         observations = []

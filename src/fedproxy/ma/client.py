@@ -15,7 +15,7 @@ from fedproxy.utils.reproducibility import derived_seed, seed_everything
 
 from .codec import encode_packet
 from .downlink import decode_downlink
-from .execution import device_assignment
+from .execution import GIB, InsufficientGpuMemory, device_assignment
 from .schema import BlockRegistry, ClientPlan
 
 
@@ -122,9 +122,29 @@ def build_update(
     }
 
 
+def replay_client_job(payload: dict) -> dict | None:
+    client_id = payload["client_id"]
+    stage = Path(payload["stage_dir"])
+    packet_path = stage / "update.bin"
+    state_path = stage / "residual.pt"
+    if packet_path.exists():
+        if not state_path.exists():
+            raise ValueError("Staged packet has no matching residual state")
+        wire = packet_path.read_bytes()
+        print(f"[ma-client] round={payload['round_id'] + 1} client={client_id} "
+              "replayed=True (training already complete)", flush=True)
+        return {"client_id": client_id, "wire": wire, "replayed": True,
+                "residual_state_bytes": state_path.stat().st_size}
+    return None
+
+
 def run_client_job(payload: dict) -> dict:
     """One isolated logical client job. A completed packet is replayed verbatim."""
     from fedproxy.workflows import _load_client_examples, _load_train_model, _make_client_loader
+
+    saved = replay_client_job(payload)
+    if saved is not None:
+        return saved
 
     cfg = payload["cfg"]
     client_id = payload["client_id"]
@@ -134,13 +154,6 @@ def run_client_job(payload: dict) -> dict:
     stage = Path(payload["stage_dir"])
     packet_path = stage / "update.bin"
     state_path = stage / "residual.pt"
-    if packet_path.exists():
-        if not state_path.exists():
-            raise ValueError("Staged packet has no matching residual state")
-        wire = packet_path.read_bytes()
-        print(f"[ma-client] round={round_id + 1} client={client_id} replayed=True (training already complete)", flush=True)
-        return {"client_id": client_id, "wire": wire, "replayed": True,
-                "residual_state_bytes": state_path.stat().st_size}
     device_index = payload.get("device_index")
     if device_index is not None:
         torch.cuda.set_device(int(device_index))
@@ -171,6 +184,11 @@ def run_client_job(payload: dict) -> dict:
         registry.spec.total_numel / sum(base[name].numel() for name in active)
         if cfg["ma"]["pcr"]["mode"] == "active_mean_scaled" else 1.0
     )
+    minimum = payload.get("min_free_bytes")
+    if minimum is not None:
+        free, _ = torch.cuda.mem_get_info(device)
+        if free <= minimum:
+            raise InsufficientGpuMemory(f"{free / GIB:.2f} GiB free before model load")
     started = time.perf_counter()
     result = train_client(
         client_id, model_factory, base, conflict, loader, cfg,

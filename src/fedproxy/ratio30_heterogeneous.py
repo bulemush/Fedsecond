@@ -213,7 +213,9 @@ def main(argv=None) -> None:
         common.record_inputs(args.root, configs, partition_validator=check_partition)
         for method in methods:
             cfg = configs[method, KEY]
-            print(f"[ratio30-heterogeneous] method={method} GPUs={args.gpu_ids} clients=8 waves=4 output={cfg['run']['output_dir']}", flush=True)
+            dispatch = "dynamic" if method == "ma" else "waves=4"
+            print(f"[ratio30-heterogeneous] method={method} GPUs={args.gpu_ids} clients=8 "
+                  f"dispatch={dispatch} output={cfg['run']['output_dir']}", flush=True)
             suite.execute_task(KEY, cfg, args.gpu_ids, ma=method == "ma", inputs_ready=True,
                                result_reader=lambda cfg=cfg, method=method: verified_result(cfg, method))
             write_summary(cfg, method)
